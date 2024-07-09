@@ -1,0 +1,53 @@
+﻿<Window
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:BBCD3_Desktop"
+        xmlns:xctk="http://schemas.xceed.com/wpf/xaml/toolkit" x:Class="BBCD3_Desktop.MainWindow"
+        mc:Ignorable="d"
+        Style="{DynamicResource CustomWindowStyle}"
+        Title="BBCD3" Height="283" Width="800">
+    <Grid Background="#212121">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+
+        </Grid.RowDefinitions>
+
+        <Grid Grid.Row="0" x:Name="TopBar" VerticalAlignment="Top" Margin="0 10 0 0" >
+            <Image Width="50" Source="bbcd_logo-white.png" HorizontalAlignment="Left" Height="Auto" Margin="30 0 0 0"/>
+            <TextBlock VerticalAlignment="Center" HorizontalAlignment="Left" FontSize="30" FontWeight="Bold" Margin="100 0 0 0"><Run Text="BBCD3"/></TextBlock>
+        </Grid>
+
+        <Grid Margin="0 10 0 0" Grid.Row="1" Height="Auto" x:Name="ContentArea">
+
+            <ComboBox x:Name="ChannelsList" Margin="30 0 0 0" HorizontalAlignment="Left" Height="20" VerticalAlignment="Top" Width="300" Grid.ColumnSpan="2">
+
+            </ComboBox>
+            <TextBlock HorizontalAlignment="Left" Margin="343,2,0,-2"><Run Text="Pick a channel"/></TextBlock>
+            <DatePicker x:Name="DatePicker" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="30,34,0,0" FirstDayOfWeek="Monday"/>
+            <xctk:TimePicker x:Name="StartTimePicker" HorizontalAlignment="Left" Margin="150,36,0,0" VerticalAlignment="Top" Width="133" Background="#FF242424" Foreground="White" BorderBrush="#FF333333"/>
+            <Button x:Name="DownloadButton" Content="Download" HorizontalAlignment="Left" Margin="30,91,0,2" Width="183" Click="DownloadButton_Click"/>
+
+            <TextBlock Margin="0,10,46,2" TextAlignment="Right" HorizontalAlignment="Right" Width="184" Grid.Column="1"><Run Text="HH               MM               SS"/></TextBlock>
+            <TextBlock Margin="0,34,208,2" TextAlignment="Right" HorizontalAlignment="Right" Width="78" Grid.Column="1"><Run Text="Duration:"/></TextBlock>
+            <xctk:IntegerUpDown x:Name="DurationMinutes" Value="0" Minimum="0" Maximum="59" Margin="0,36,102,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
+            <xctk:IntegerUpDown x:Name="DurationSeconds" Value="1" Minimum="1" Maximum="59" Margin="0,36,46,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
+            <xctk:IntegerUpDown x:Name="DurationHours" Value="0" Minimum="0" Maximum="12" Margin="0,36,162,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
+            <TextBlock x:Name="StatusText" TextAlignment="Left" Margin="0,103,10,0" Text="Status: " FontSize="20" HorizontalAlignment="Right" Width="552"/>
+            <CheckBox x:Name="EncodeCheckbox" Content="Encode (takes longer but allows iOS devices to view recordings)" HorizontalAlignment="Left" Margin="30,69,0,45"/>
+
+
+        </Grid>
+        <Button x:Name="DownloadPath" Content="Change download path" HorizontalAlignment="Left" Margin="30,148,0,-29" Width="183" Click="ChangePathBtn_Click" Grid.Row="1"/>
+        <TextBlock x:Name="SavePathText" Width="Auto" HorizontalAlignment="Left" Margin="30,174,0,-65" Grid.Row="1"><Run Text="Saving to: Downloads"/></TextBlock>
+
+
+
+
+
+
+
+    </Grid>
+</Window>

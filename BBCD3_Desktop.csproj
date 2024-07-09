@@ -1,0 +1,38 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>WinExe</OutputType>
+        <TargetFramework>net8.0-windows7.0</TargetFramework>
+        <Nullable>enable</Nullable>
+        <ImplicitUsings>enable</ImplicitUsings>
+        <UseWPF>true</UseWPF>
+        <ApplicationIcon>bbcd_logo-white_with_bg.ico</ApplicationIcon>
+        <UseWindowsForms>False</UseWindowsForms>
+    </PropertyGroup>
+
+    <ItemGroup>
+      <PackageReference Include="Extended.Wpf.Toolkit" Version="4.6.1" />
+      <PackageReference Include="PresentationFramework.Aero2" Version="1.0.1" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Remove="bbcd_logo-white.png" />
+      <Resource Include="bbcd_logo-white.png" />
+      <None Remove="bbcd_logo-black.png" />
+      <COMReference Include="{215d64d2-031c-33c7-96e3-61794cd1ee61}">
+        <WrapperTool>tlbimp</WrapperTool>
+        <VersionMinor>4</VersionMinor>
+        <VersionMajor>2</VersionMajor>
+        <Guid>215d64d2-031c-33c7-96e3-61794cd1ee61</Guid>
+      </COMReference>
+      <Content Include="bbcd_logo-white_with_bg.ico" />
+      <Resource Include="bbcd_logo-black.png" />
+    </ItemGroup>
+
+    <ItemGroup>
+      <None Update="ffmpeg.exe">
+        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      </None>
+    </ItemGroup>
+
+</Project>
