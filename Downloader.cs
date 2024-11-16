@@ -17,6 +17,8 @@ namespace BBCD3_Desktop
         //event to update status Text
         public static event EventHandler<string> StatusUpdate;
         public static event EventHandler<string> DownloadError;
+        public static event EventHandler<int> ProgressUpdated;
+
 
 
 
@@ -56,7 +58,7 @@ namespace BBCD3_Desktop
             }
         }
 
-        static async Task<string[]> DownloadSegments(string channel, string jobUuid, int[] segmentIdxRange)
+        static async Task<string[]> DownloadSegments(string channel, string jobUuid, int[] segmentIdxRange, int maxConcurrentDownloads)
         {
             string urlPrefix = SOURCES.GetSource(channel).UrlPrefix;
 
@@ -66,30 +68,97 @@ namespace BBCD3_Desktop
             string videoInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_init.m4s";
             string audioInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_init.m4s";
 
-            List<Task> videoDownloadJobs = new List<Task> { DownloadSegment(videoInitUrl, videoInitFilename) };
-            List<Task> audioDownloadJobs = new List<Task> { DownloadSegment(audioInitUrl, audioInitFilename) };
+            int totalSegments = (segmentIdxRange[1] - segmentIdxRange[0] + 1) * 2 + 2; // includes video/audio init segments
+            int completedSegments = 0;
 
-            for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
+            // Update progress after each segment download completes
+            void UpdateProgress()
             {
-
-                string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{segmentIdx}.m4s";
-                string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
-                StatusUpdate?.Invoke(null, $"Downloading video segment {segmentIdx}...");
-                Console.WriteLine($"Downloading video segment {segmentIdx}...");
-                videoDownloadJobs.Add(DownloadSegment(videoUrl, videoFilename));
-
-                string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{segmentIdx}.m4s";
-                string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
-                StatusUpdate?.Invoke(null, $"Downloading audio segment {segmentIdx}...");
-                Console.WriteLine($"Downloading audio segment {segmentIdx}...");
-                audioDownloadJobs.Add(DownloadSegment(audioUrl, audioFilename));
+                int progress = (int)((double)completedSegments / totalSegments * 100);
+                ProgressUpdated?.Invoke(null, progress);
             }
 
-            await Task.WhenAll(videoDownloadJobs);
-            await Task.WhenAll(audioDownloadJobs);
+            // Semaphore to control max concurrent downloads
+            SemaphoreSlim semaphore = new SemaphoreSlim(maxConcurrentDownloads);
+            List<Task> downloadTasks = new List<Task>
+    {
+        // Initial video and audio download tasks
+        Task.Run(async () =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                await DownloadSegment(videoInitUrl, videoInitFilename);
+                completedSegments++;
+                UpdateProgress();
+            }
+            finally { semaphore.Release(); }
+        }),
+        Task.Run(async () =>
+        {
+            await semaphore.WaitAsync();
+            try
+            {
+                await DownloadSegment(audioInitUrl, audioInitFilename);
+                completedSegments++;
+                UpdateProgress();
+            }
+            finally { semaphore.Release(); }
+        })
+    };
 
+            // Add tasks for each video and audio segment
+            for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
+            {
+                string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{segmentIdx}.m4s";
+                string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
+                string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{segmentIdx}.m4s";
+                string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
+
+                // Video download task
+                downloadTasks.Add(Task.Run(async () =>
+                {
+                    await semaphore.WaitAsync();
+                    try
+                    {
+                        await DownloadSegment(videoUrl, videoFilename);
+                        completedSegments++;
+                        // Update status for every 5 segments 
+                        if (segmentIdx % 5 == 0)
+                        {
+                            StatusUpdate?.Invoke(null, $"Downloading segment {segmentIdx}...");
+                            await Task.Delay(100); // Small delay to allow UI to refresh
+                        }
+                        UpdateProgress();
+                    }
+                    finally { semaphore.Release(); }
+                }));
+
+                // Audio download task
+                downloadTasks.Add(Task.Run(async () =>
+                {
+                    await semaphore.WaitAsync();
+                    try
+                    {
+                        await DownloadSegment(audioUrl, audioFilename);
+                        completedSegments++;
+                        // Update status for every 5 segments 
+                        if (segmentIdx % 5 == 0)
+                        {
+                            StatusUpdate?.Invoke(null, $"Downloading segment {segmentIdx}...");
+                            await Task.Delay(100); // Small delay to allow UI to refresh
+                        }
+                        UpdateProgress();
+                    }
+                    finally { semaphore.Release(); }
+                }));
+            }
+
+            await Task.WhenAll(downloadTasks);
             return new[] { videoInitFilename, audioInitFilename };
         }
+
+
 
         static async Task CombineSegments(string jobUuid, int[] segmentIdxRange, string videoInitFilename, string audioInitFilename, string outputFilename, string finalPath, bool encode)
         {
@@ -210,7 +279,8 @@ namespace BBCD3_Desktop
                     }
                     try
                     {
-                        var filenames = await DownloadSegments(channel, jobUuid, segmentIdxRange);
+                        var filenames = await DownloadSegments(channel, jobUuid, segmentIdxRange, maxConcurrentDownloads: 10); 
+
 
                         await CombineSegments(jobUuid, segmentIdxRange, filenames[0], filenames[1], outputFilename, finalPath ,encode);
 
@@ -292,8 +362,12 @@ namespace BBCD3_Desktop
         public static Dictionary<string, Source> All = new Dictionary<string, Source>
         {
             { "BBC News (United Kingdom)", new Source { UrlPrefix = "https://vs-cmaf-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/" } },
-            { "BBC News (North America)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
-            { "BBC One London", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
+            { "BBC News (North America) [US Only]", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
+            { "BBC Arabic", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
+            { "BBC Persian", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
+
+
+            { "BBC One London [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
             { "BBC One Wales", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/" } },
             { "BBC One Scotland", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/" } },
             { "BBC One Northern Ireland", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_northern_ireland_hd/" } },

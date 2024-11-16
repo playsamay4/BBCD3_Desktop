@@ -17,6 +17,7 @@
 
     <ItemGroup>
       <None Remove="bbcd_logo-white.png" />
+      <None Remove="error.png" />
       <Resource Include="bbcd_logo-white.png" />
       <None Remove="bbcd_logo-black.png" />
       <COMReference Include="{215d64d2-031c-33c7-96e3-61794cd1ee61}">
@@ -27,6 +28,7 @@
       </COMReference>
       <Content Include="bbcd_logo-white_with_bg.ico" />
       <Resource Include="bbcd_logo-black.png" />
+      <Resource Include="error.png" />
     </ItemGroup>
 
     <ItemGroup>

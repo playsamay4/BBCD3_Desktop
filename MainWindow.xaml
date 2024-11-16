@@ -27,7 +27,7 @@
             </ComboBox>
             <TextBlock HorizontalAlignment="Left" Margin="343,2,0,-2"><Run Text="Pick a channel"/></TextBlock>
             <DatePicker x:Name="DatePicker" HorizontalAlignment="Left" VerticalAlignment="Top" Margin="30,34,0,0" FirstDayOfWeek="Monday"/>
-            <xctk:TimePicker x:Name="StartTimePicker" HorizontalAlignment="Left" Margin="150,36,0,0" VerticalAlignment="Top" Width="133" Background="#FF242424" Foreground="White" BorderBrush="#FF333333"/>
+            <xctk:TimePicker x:Name="StartTimePicker" HorizontalAlignment="Left" Margin="197,36,0,0" VerticalAlignment="Top" Width="133" Background="#FF242424" Foreground="White" BorderBrush="#FF333333"/>
             <Button x:Name="DownloadButton" Content="Download" HorizontalAlignment="Left" Margin="30,91,0,2" Width="183" Click="DownloadButton_Click"/>
 
             <TextBlock Margin="0,10,46,2" TextAlignment="Right" HorizontalAlignment="Right" Width="184" Grid.Column="1"><Run Text="HH               MM               SS"/></TextBlock>
@@ -37,6 +37,7 @@
             <xctk:IntegerUpDown x:Name="DurationHours" Value="0" Minimum="0" Maximum="12" Margin="0,36,162,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
             <TextBlock x:Name="StatusText" TextAlignment="Left" Margin="0,103,10,0" Text="Status: " FontSize="20" HorizontalAlignment="Right" Width="552"/>
             <CheckBox x:Name="EncodeCheckbox" Content="Encode (takes longer but allows iOS devices to view recordings)" HorizontalAlignment="Left" Margin="30,69,0,45"/>
+            <ProgressBar x:Name="StatusProgress" Margin="236,151,10,-38"  />
 
 
         </Grid>

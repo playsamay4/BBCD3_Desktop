@@ -26,6 +26,13 @@ public partial class MainWindow : Window
 
         Downloader.StatusUpdate += Downloader_StatusUpdate;
         Downloader.DownloadError += Downloader_DownloadError;
+        Downloader.ProgressUpdated += (sender, progress) =>
+        {
+            Dispatcher.Invoke(() => StatusProgress.Value = progress);
+        };
+
+        StartTimePicker.Value = DateTime.Now;
+        DatePicker.SelectedDate = DateTime.Now;
     }
 
     private void Downloader_StatusUpdate(object sender, string e)
@@ -44,9 +51,13 @@ public partial class MainWindow : Window
         {
            if(e.Contains("Forbidden"))
             {
-                MessageBox.Show("Couldn't download. This channel link is geo-blocked and can't be accessed from your location.\n\nDebug information\nError occured at stage '" + StatusText.Text.Replace("Status: ", "") + "': " + e, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+                ShowError("Couldn't download. This channel link is geo-blocked and can't be accessed from your location.\n\nDebug information\nError occured at stage '" + StatusText.Text.Replace("Status: ", "") + "': " + e);
             }
-            MessageBox.Show("Couldn't download. Check the date you've selected isn't in the future and not too far in the past (todo: check exactly how far back it can grab !!!)\n\nDebug information\nError occured at stage '"+ StatusText.Text.Replace("Status: ","")+ "': " + e, "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+           else if(e.Contains("Not Found"))
+            {
+                ShowError("Couldn't download. You can only grab as far back as ~13 days.");
+            }    
+            ShowError("Couldn't download. Check the date you've selected isn't in the future and not too far in the past (todo: check exactly how far back it can grab !!!)\n\nDebug information\nError occured at stage '"+ StatusText.Text.Replace("Status: ","")+ "': " + e);
         });
 
     }
@@ -68,42 +79,50 @@ public partial class MainWindow : Window
         }
     }
 
+    public void ShowError(string content)
+    {
+        PrettyError error = new PrettyError();
+        error.errorContent = content;
+        error.ShowDialog();
+
+    }
+
     private bool Validate()
     {
         //validate all fields
         if (ChannelsList.SelectedItem == null)
         {
-            MessageBox.Show("Please select a channel", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError("Please select a channel");
             return false;
         }
 
         if (DatePicker.SelectedDate == null)
         {
-            MessageBox.Show("Please select a date", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError("Please select a date");
             return false;
         }
 
         if (StartTimePicker.Value == null)
         {
-            MessageBox.Show("Please select a start time", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError("Please select a start time");
             return false;
         }
 
         if (DurationHours.Text == "")
         {
-            MessageBox.Show("Please enter a duration", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError("Please enter a duration");
             return false;
         }
 
         if (DurationMinutes.Text == "")
         {
-            MessageBox.Show("Please enter a duration", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError("Please enter a duration" );
             return false;
         }
 
         if (DurationSeconds.Text == "")
         {
-            MessageBox.Show("Please enter a duration", "Error", MessageBoxButton.OK, MessageBoxImage.Error);
+            ShowError("Please enter a duration");
             return false;
         }
 

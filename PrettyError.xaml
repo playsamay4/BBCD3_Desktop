@@ -1,0 +1,20 @@
+﻿<Window x:Class="BBCD3_Desktop.PrettyError"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:BBCD3_Desktop"
+        mc:Ignorable="d"
+        Style="{DynamicResource CustomWindowStyle}"
+        Title="Error" Height="190" Width="373" WindowStyle="ToolWindow">
+
+    <Grid>
+        <Image  HorizontalAlignment="Left" Height="40" Margin="28,37,0,0" VerticalAlignment="Top" Width="40" Source="/error.png"/>
+        <Border BorderBrush="{x:Null}"  HorizontalAlignment="Left" Margin="80,23,0,0" VerticalAlignment="Top" Height="89" Width="269" >
+            <TextBox  x:Name="ErrorContent" TextWrapping="Wrap" HorizontalAlignment="Center" Margin="0,20,0,0" VerticalAlignment="Top" Height="69" Width="269"  IsReadOnly="True" Text="This is an error." Background="{x:Null}" BorderBrush="{x:Null}"/>
+        </Border>
+        <Button x:Name="OKButton" Click="OKButton_Click" Content="OK" HorizontalAlignment="Left" Margin="261,120,0,0" VerticalAlignment="Top" Width="100" Height="24"/>
+
+    </Grid>
+    
+</Window>
