@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -12,7 +13,7 @@ namespace BBCD3_Desktop
 {
     public class Downloader
     {
-        const string TEMP_DIRECTORY = "TempFiles";
+        public static string TEMP_DIRECTORY = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)+ "\\TempFiles";
 
         //event to update status Text
         public static event EventHandler<string> StatusUpdate;
