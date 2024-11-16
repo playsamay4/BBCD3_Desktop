@@ -260,7 +260,7 @@ namespace BBCD3_Desktop
 
             //string outputFilename = $"{TEMP_DIRECTORY}/{jobUuid}/{jobUuid}.mp4";
             string fancyName = $"{channel}_{startTimestamp}_{endTimestamp}.mp4";
-            fancyName = fancyName.Replace(" ", "-");
+            fancyName = fancyName.Replace(" ", "-").Replace("-[UK-Only]-","").Replace("-[US-Only]-", "");
             string outputFilename = $"{TEMP_DIRECTORY}/{jobUuid}/{fancyName}";
 
             try
@@ -362,7 +362,7 @@ namespace BBCD3_Desktop
         public static Dictionary<string, Source> All = new Dictionary<string, Source>
         {
             { "BBC News (United Kingdom)", new Source { UrlPrefix = "https://vs-cmaf-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/" } },
-            { "BBC News (North America) [US Only]", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
+            { "BBC News (North America) [US Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
             { "BBC Arabic", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
             { "BBC Persian", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
 
