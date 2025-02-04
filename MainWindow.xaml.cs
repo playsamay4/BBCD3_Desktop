@@ -13,11 +13,18 @@ namespace BBCD3_Desktop;
 /// </summary>
 public partial class MainWindow : Window
 {
+    private readonly string logPath;
     string savePath = Environment.GetEnvironmentVariable("USERPROFILE") + @"\" + "Downloads";
 
     public MainWindow()
     {
         InitializeComponent();
+
+        // logs directory in application folder
+        string appFolder = AppDomain.CurrentDomain.BaseDirectory;
+        string logsFolder = Path.Combine(appFolder, "logs");
+        Directory.CreateDirectory(logsFolder);
+        logPath = Path.Combine(logsFolder, "error_log.txt");
 
         foreach(string key in SOURCES.All.Keys)
         {
@@ -46,20 +53,44 @@ public partial class MainWindow : Window
         });
     }
 
+    private void LogError(string errorMessage)
+    {
+        try
+        {
+            string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            string logEntry = $"[{timestamp}] {errorMessage}{Environment.NewLine}";
+            File.AppendAllText(logPath, logEntry);
+        }
+        catch (Exception ex)
+        {
+            Debug.WriteLine($"Failed to write to error log: {ex.Message}");
+        }
+    }
+
     private void Downloader_DownloadError(object sender, string e)
     {
         //invoke
         Dispatcher.Invoke(() =>
         {
-           if(e.Contains("Forbidden"))
+            string errorMessage;
+            if(e.Contains("Forbidden"))
             {
-                ShowError("Couldn't download. This channel link is geo-blocked and can't be accessed from your location.\n\nDebug information\nError occured at stage '" + StatusText.Text.Replace("Status: ", "") + "': " + e);
+                errorMessage = $"Geo-blocking error: {e}";
+                ShowError("Couldn't download. This channel link is geo-blocked and can't be accessed from your location.");
             }
-           else if(e.Contains("Not Found"))
+            else if(e.Contains("Not Found"))
             {
-                ShowError("Couldn't download. You can only grab as far back as ~13 days.");
+                errorMessage = $"Date range error: {e}";
+                ShowError("Couldn't download. You can only grab from the past, as far back as 14 days.");
             }    
-            ShowError("Couldn't download. Check the date you've selected isn't in the future and not too far in the past (todo: check exactly how far back it can grab !!!)\n\nDebug information\nError occured at stage '"+ StatusText.Text.Replace("Status: ","")+ "': " + e);
+            else
+            {
+                errorMessage = $"General error: {e}";
+                ShowError("Couldn't download. Check logs for more information.");
+            }
+
+            // Log the error with current status
+            LogError($"{errorMessage}\nStatus at time of error: {StatusText.Text}");
         });
 
     }
