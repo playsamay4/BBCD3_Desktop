@@ -31,8 +31,10 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() => StatusProgress.Value = progress);
         };
 
-        StartTimePicker.Value = DateTime.Now;
-        DatePicker.SelectedDate = DateTime.Now;
+        TimeZoneInfo londonTimeZone = TimeZoneInfo.FindSystemTimeZoneById("GMT Standard Time");
+        DateTime londonTime = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, londonTimeZone);
+        StartTimePicker.Value = londonTime;
+        DatePicker.SelectedDate = londonTime;
     }
 
     private void Downloader_StatusUpdate(object sender, string e)
