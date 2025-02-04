@@ -280,7 +280,7 @@ namespace BBCD3_Desktop
                     }
                     try
                     {
-                        var filenames = await DownloadSegments(channel, jobUuid, segmentIdxRange, maxConcurrentDownloads: 10); 
+                        var filenames = await DownloadSegments(channel, jobUuid, segmentIdxRange, maxConcurrentDownloads: 5); 
 
 
                         await CombineSegments(jobUuid, segmentIdxRange, filenames[0], filenames[1], outputFilename, finalPath ,encode);
