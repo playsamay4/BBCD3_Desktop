@@ -8,58 +8,112 @@ using System.Net.Http;
 using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
+using System.Threading;
 
 namespace BBCD3_Desktop
 {
     public class Downloader
     {
-        public static string TEMP_DIRECTORY = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)+ "\\TempFiles";
+        public static string TEMP_DIRECTORY = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\TempFiles";
+        const int MAX_RETRIES = 3;
+        const int RETRY_DELAY_MS = 1000;
+        public static bool FAST_MODE = true;  // Fast mode (Parallel Downloads) Stable Mode (Sequential Downloads)
+        private static string _logFilePath = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "download_log.txt");
+        private static bool _isErrorDisplayed = false; // Static to persist across Clip calls within a download.
+        private static bool _hasDownloadFailed = false; // Flag to signal a download failure.
 
         //event to update status Text
         public static event EventHandler<string> StatusUpdate;
         public static event EventHandler<string> DownloadError;
         public static event EventHandler<int> ProgressUpdated;
 
-
-
-
-        public static async Task StartDownload(string startTimeStr, string endTimeStr, string channel, string finalPath, bool encode)
+        public static async Task StartDownload(string startTimeStr, string endTimeStr, string channel, string finalPath, bool encode, bool fastMode)
         {
+            FAST_MODE = fastMode;
             StatusUpdate?.Invoke(null, "Starting download...");
 
+            try
+            {
+                File.WriteAllText(_logFilePath, string.Empty);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error clearing log file: {ex.Message}");
+                StatusUpdate?.Invoke(null, $"[ERROR] Error clearing log file: {ex.Message}");
+            }
+
             string jobUuid = Guid.NewGuid().ToString();
-            
+
             DateTime startTime = DateTime.ParseExact(startTimeStr, "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
             DateTime endTime = DateTime.ParseExact(endTimeStr, "yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
 
-
-            // Convert to Unix timestamps
             long startTimestamp = new DateTimeOffset(startTime).ToUnixTimeSeconds();
             long endTimestamp = new DateTimeOffset(endTime).ToUnixTimeSeconds();
+
+            _isErrorDisplayed = false; // Reset at the start of each *full* download.
+            _hasDownloadFailed = false; // Reset at the start of each full download.
 
             await Clip(channel, startTimestamp, endTimestamp, jobUuid, finalPath, encode);
         }
 
-        static async Task DownloadSegment(string url, string filename)
+        static async Task<bool> DownloadSegmentWithRetry(string url, string filename)
         {
-            using (HttpClient client = new HttpClient())
+            if (_hasDownloadFailed) // Short-circuit if another download has failed
             {
-                var response = await client.GetAsync(url);
+                Log($"Skipping download {url} due to previous failure.", ConsoleColor.DarkGray);
+                return false;
+            }
 
-                if (response.IsSuccessStatusCode)
+            int retries = 0;
+            while (retries < MAX_RETRIES)
+            {
+                try
                 {
-                    var data = await response.Content.ReadAsByteArrayAsync();
-                    await File.WriteAllBytesAsync(filename, data);
+                    Log($"Attempting to download {url} to {filename}, attempt {retries + 1}/{MAX_RETRIES}", ConsoleColor.Yellow);
+
+                    using (HttpClient client = new HttpClient())
+                    {
+                        var response = await client.GetAsync(url);
+
+                        if (response.IsSuccessStatusCode)
+                        {
+                            var data = await response.Content.ReadAsByteArrayAsync();
+                            await File.WriteAllBytesAsync(filename, data);
+
+                            Log($"Successfully downloaded {url} to {filename}", ConsoleColor.Green);
+
+                            return true;
+                        }
+                        else
+                        {
+                            Log($"Download failed for {url}: {response.ReasonPhrase}.  Status Code: {response.StatusCode}", ConsoleColor.Red);
+                            retries++;
+                            if (retries < MAX_RETRIES)
+                            {
+                                Log($"Retrying in {RETRY_DELAY_MS}ms...", ConsoleColor.DarkYellow);
+                                await Task.Delay(RETRY_DELAY_MS);
+                            }
+                        }
+                    }
                 }
-                else
+                catch (Exception ex)
                 {
-
-                    throw new Exception($"Downloading segment failed: {response.ReasonPhrase}");
+                    Log($"Exception during download of {url}: {ex.Message}", ConsoleColor.Red);
+                    retries++;
+                    if (retries < MAX_RETRIES)
+                    {
+                        Log($"Retrying in {RETRY_DELAY_MS}ms...", ConsoleColor.DarkYellow);
+                        await Task.Delay(RETRY_DELAY_MS);
+                    }
                 }
             }
+
+            Log($"Failed to download {url} after {MAX_RETRIES} retries.", ConsoleColor.Red, true);
+            SetDownloadFailed(); // Set the failure flag.
+            return false;
         }
 
-        static async Task<string[]> DownloadSegments(string channel, string jobUuid, int[] segmentIdxRange, int maxConcurrentDownloads)
+        static async Task<string[]> DownloadSegments(string channel, string jobUuid, int[] segmentIdxRange)
         {
             string urlPrefix = SOURCES.GetSource(channel).UrlPrefix;
 
@@ -69,112 +123,178 @@ namespace BBCD3_Desktop
             string videoInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_init.m4s";
             string audioInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_init.m4s";
 
-            int totalSegments = (segmentIdxRange[1] - segmentIdxRange[0] + 1) * 2 + 2; // includes video/audio init segments
+            Log("Downloading initialization segments...", ConsoleColor.Cyan);
+
+            bool videoInitSuccess = await DownloadSegmentWithRetry(videoInitUrl, videoInitFilename);
+            if (!videoInitSuccess)
+            {
+                Log("Failed to download initialization segments. Aborting.", ConsoleColor.Red, true);
+                SetDownloadFailed();
+                SetErrorDisplayed();
+                return null;
+            }
+
+            bool audioInitSuccess = await DownloadSegmentWithRetry(audioInitUrl, audioInitFilename);
+            if (!audioInitSuccess)
+            {
+                Log("Failed to download initialization segments. Aborting.", ConsoleColor.Red, true);
+                SetDownloadFailed();
+                SetErrorDisplayed();
+                return null;
+            }
+
+            // Calculate total segments for progress reporting.
+            int totalSegments = (segmentIdxRange[1] - segmentIdxRange[0] + 1) * 2;
+
+            // Track completed segment downloads
             int completedSegments = 0;
 
-            // Update progress after each segment download completes
-            void UpdateProgress()
+            if (FAST_MODE)
             {
-                int progress = (int)((double)completedSegments / totalSegments * 100);
-                ProgressUpdated?.Invoke(null, progress);
-            }
+                Log("Downloading segments in FAST MODE (parallel downloads)...", ConsoleColor.Magenta);
 
-            // Semaphore to control max concurrent downloads
-            SemaphoreSlim semaphore = new SemaphoreSlim(maxConcurrentDownloads);
-            List<Task> downloadTasks = new List<Task>
-    {
-        // Initial video and audio download tasks
-        Task.Run(async () =>
-        {
-            await semaphore.WaitAsync();
-            try
-            {
-                await DownloadSegment(videoInitUrl, videoInitFilename);
-                completedSegments++;
-                UpdateProgress();
-            }
-            finally { semaphore.Release(); }
-        }),
-        Task.Run(async () =>
-        {
-            await semaphore.WaitAsync();
-            try
-            {
-                await DownloadSegment(audioInitUrl, audioInitFilename);
-                completedSegments++;
-                UpdateProgress();
-            }
-            finally { semaphore.Release(); }
-        })
-    };
-
-            // Add tasks for each video and audio segment
-            for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
-            {
-                string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{segmentIdx}.m4s";
-                string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
-                string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{segmentIdx}.m4s";
-                string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
-
-                // Video download task
-                downloadTasks.Add(Task.Run(async () =>
+                List<Task> downloadTasks = new List<Task>();
+                for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
                 {
-                    await semaphore.WaitAsync();
-                    try
-                    {
-                        await DownloadSegment(videoUrl, videoFilename);
-                        completedSegments++;
-                        // Update status for every 5 segments 
-                        if (segmentIdx % 5 == 0)
-                        {
-                            StatusUpdate?.Invoke(null, $"Downloading segment {segmentIdx}...");
-                            await Task.Delay(100); // Small delay to allow UI to refresh
-                        }
-                        UpdateProgress();
-                    }
-                    finally { semaphore.Release(); }
-                }));
+                    string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{segmentIdx}.m4s";
+                    string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
+                    string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{segmentIdx}.m4s";
+                    string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
 
-                // Audio download task
-                downloadTasks.Add(Task.Run(async () =>
-                {
-                    await semaphore.WaitAsync();
-                    try
+                    // Stop if a download has failed
+                    if (_hasDownloadFailed) break;
+
+                    downloadTasks.Add(DownloadSegmentAsync(videoUrl, videoFilename, () =>
                     {
-                        await DownloadSegment(audioUrl, audioFilename);
-                        completedSegments++;
-                        // Update status for every 5 segments 
-                        if (segmentIdx % 5 == 0)
-                        {
-                            StatusUpdate?.Invoke(null, $"Downloading segment {segmentIdx}...");
-                            await Task.Delay(100); // Small delay to allow UI to refresh
-                        }
-                        UpdateProgress();
+                        Interlocked.Increment(ref completedSegments);
+                        UpdateProgress(completedSegments, totalSegments);
+                    }));
+                    downloadTasks.Add(DownloadSegmentAsync(audioUrl, audioFilename, () =>
+                    {
+                        Interlocked.Increment(ref completedSegments);
+                        UpdateProgress(completedSegments, totalSegments);
+                    }));
+                }
+                await Task.WhenAll(downloadTasks);
+
+            }
+            else
+            {
+                Log("Downloading segments in STABLE MODE (sequential downloads)...", ConsoleColor.DarkYellow);
+
+                for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
+                {
+                    // Stop if a download has failed
+                    if (_hasDownloadFailed) break;
+
+                    string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{segmentIdx}.m4s";
+                    string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
+                    Log($"Downloading video segment {segmentIdx}...", ConsoleColor.White);
+                    bool videoSuccess = await DownloadSegmentWithRetry(videoUrl, videoFilename);
+                    if (videoSuccess)
+                    {
+                        Interlocked.Increment(ref completedSegments);
+                        UpdateProgress(completedSegments, totalSegments);
                     }
-                    finally { semaphore.Release(); }
-                }));
+
+                    string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{segmentIdx}.m4s";
+                    string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
+                    Log($"Downloading audio segment {segmentIdx}...", ConsoleColor.White);
+                    bool audioSuccess = await DownloadSegmentWithRetry(audioUrl, audioFilename);
+                    if (audioSuccess)
+                    {
+                        Interlocked.Increment(ref completedSegments);
+                        UpdateProgress(completedSegments, totalSegments);
+                    }
+                }
             }
 
-            await Task.WhenAll(downloadTasks);
+            if (_hasDownloadFailed) // Check if downloads were aborted
+            {
+                return null; // Do not pass incomplete downloads to combine
+            }
+
             return new[] { videoInitFilename, audioInitFilename };
         }
 
+        static async Task DownloadSegmentAsync(string url, string filename, Action onComplete)
+        {
+            Log($"Downloading segment asynchronously: {url} to {filename}", ConsoleColor.White);
+            bool success = await DownloadSegmentWithRetry(url, filename);
 
+            if (success)
+            {
+                onComplete?.Invoke();
+            }
+            else
+            {
+                SetDownloadFailed(); // Signal the download failure in parallel.
+            }
+        }
+
+        static void SetDownloadFailed()
+        {
+            _hasDownloadFailed = true;
+            SetErrorDisplayed(); // Also make sure error flag is set
+        }
+
+        static void SetErrorDisplayed()
+        {
+            _isErrorDisplayed = true;
+        }
+
+        //Progress update
+        static void UpdateProgress(int completedSegments, int totalSegments)
+        {
+            //Calculate progress as percentage
+            int progress = (int)((double)completedSegments / totalSegments * 100);
+
+            //Report progress
+            ProgressUpdated?.Invoke(null, progress);
+        }
 
         static async Task CombineSegments(string jobUuid, int[] segmentIdxRange, string videoInitFilename, string audioInitFilename, string outputFilename, string finalPath, bool encode)
         {
+            if (_hasDownloadFailed)
+            {
+                Log("Skipping combining segments due to download failure.", ConsoleColor.DarkGray);
+                return; // Abort combining segments.
+            }
 
-            Console.WriteLine("Combining segments...");
+            Log("Combining segments...", ConsoleColor.Cyan);
             StatusUpdate?.Invoke(null, "Combining segments...");
-            string videoFiles = $"concat:{videoInitFilename}";
-            string audioFiles = $"concat:{audioInitFilename}";
+
+            List<string> videoFileList = new List<string>() { videoInitFilename };
+            List<string> audioFileList = new List<string>() { audioInitFilename };
 
             for (int number = segmentIdxRange[0]; number <= segmentIdxRange[1]; number++)
             {
-                Console.WriteLine($"Adding segment {number} to the concatenation...");
-                videoFiles += $"|{TEMP_DIRECTORY}/{jobUuid}/video_{number}.m4s";
-                audioFiles += $"|{TEMP_DIRECTORY}/{jobUuid}/audio_{number}.m4s";
+                string videoSegmentPath = $"{TEMP_DIRECTORY}/{jobUuid}/video_{number}.m4s";
+                string audioSegmentPath = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{number}.m4s";
+
+                if (File.Exists(videoSegmentPath))
+                {
+                    Log($"Adding video segment {number} to the concatenation...", ConsoleColor.Green);
+                    videoFileList.Add(videoSegmentPath);
+                }
+                else
+                {
+                    Log($"Video segment {number} not found, skipping.", ConsoleColor.DarkGray);
+                }
+
+                if (File.Exists(audioSegmentPath))
+                {
+                    Log($"Adding audio segment {number} to the concatenation...", ConsoleColor.Green);
+                    audioFileList.Add(audioSegmentPath);
+                }
+                else
+                {
+                    Log($"Audio segment {number} not found, skipping.", ConsoleColor.DarkGray);
+                }
             }
+
+            string videoFiles = "concat:" + string.Join("|", videoFileList);
+            string audioFiles = "concat:" + string.Join("|", audioFileList);
 
             string concatenatedVideoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_full.mp4";
             string concatenatedAudioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_full.mp4";
@@ -186,7 +306,7 @@ namespace BBCD3_Desktop
 
             List<Task> ffmpegTasks = new List<Task>();
 
-            Console.WriteLine($"Running command: {concatCommands[0]}");
+            Log($"Running command: {concatCommands[0]}", ConsoleColor.White);
             Process process = new Process
             {
                 StartInfo =
@@ -201,7 +321,7 @@ namespace BBCD3_Desktop
             process.Start();
             process.WaitForExit();
 
-            Console.WriteLine($"Running command: {concatCommands[1]}");
+            Log($"Running command: {concatCommands[1]}", ConsoleColor.White);
             Process processAudio = new Process
             {
                 StartInfo =
@@ -213,13 +333,10 @@ namespace BBCD3_Desktop
                     Arguments = concatCommands[1]
                 }
             };
-
             processAudio.Start();
             processAudio.WaitForExit();
 
-
-            
-            Console.WriteLine("Concatenation complete");
+            Log("Concatenation complete", ConsoleColor.Cyan);
 
             await Task.Delay(1000);
 
@@ -228,7 +345,7 @@ namespace BBCD3_Desktop
             if (encode)
             {
                 finalCommand = $"-loglevel quiet -i {concatenatedVideoFilename} -i {concatenatedAudioFilename} -c:v libx264 -c:a copy {outputFilename}";
-                Console.WriteLine($"Running command: {finalCommand}");
+                Log($"Running command: {finalCommand}", ConsoleColor.White);
                 StatusUpdate?.Invoke(null, $"Encoding... This may take a while!!");
                 await RunProcess(finalCommand);
 
@@ -236,40 +353,31 @@ namespace BBCD3_Desktop
             else
             {
                 finalCommand = $"-loglevel quiet -i {concatenatedVideoFilename} -i {concatenatedAudioFilename} -c:v copy -c:a copy {outputFilename}";
-                Console.WriteLine($"Running command: {finalCommand}");
+                Log($"Running command: {finalCommand}", ConsoleColor.White);
                 await RunProcess(finalCommand);
-
             }
 
-
             StatusUpdate?.Invoke(null, $"Cleaning up...");
-            Console.WriteLine("Cleaning up...");
-
-            
+            Log("Cleaning up...", ConsoleColor.Cyan);
 
             //copy the file to desired directory
             File.Copy(outputFilename, Path.Combine(Path.GetFullPath(finalPath), Path.GetFileName(outputFilename)), true);
 
             StatusUpdate?.Invoke(null, $"Finished :)");
-            Console.WriteLine("Cleanup complete");
+            Log("Cleanup complete", ConsoleColor.Cyan);
         }
-
-
 
         static async Task Clip(string channel, long startTimestamp, long endTimestamp, string jobUuid, string finalPath, bool encode)
         {
-
-            //string outputFilename = $"{TEMP_DIRECTORY}/{jobUuid}/{jobUuid}.mp4";
             string fancyName = $"{channel}_{startTimestamp}_{endTimestamp}.mp4";
-            fancyName = fancyName.Replace(" ", "-").Replace("-[UK-Only]-","").Replace("-[US-Only]-", "");
+            fancyName = fancyName.Replace(" ", "-").Replace("-[UK-Only]-", "").Replace("-[US-Only]-", "");
             string outputFilename = $"{TEMP_DIRECTORY}/{jobUuid}/{fancyName}";
 
             try
             {
                 try
                 {
-                    Console.WriteLine(
-                        $"Starting clip from channel {channel} from {startTimestamp}-{endTimestamp} with UUID {jobUuid}");
+                    Log($"Starting clip from channel {channel} from {startTimestamp}-{endTimestamp} with UUID {jobUuid}", ConsoleColor.Cyan);
 
                     int[] segmentIdxRange = Array.ConvertAll(new[] { startTimestamp, endTimestamp },
                         bound => CalculateSegmentIdx(bound + 38));
@@ -280,17 +388,27 @@ namespace BBCD3_Desktop
                     }
                     try
                     {
-                        var filenames = await DownloadSegments(channel, jobUuid, segmentIdxRange, maxConcurrentDownloads: 5); 
+                        var filenames = await DownloadSegments(channel, jobUuid, segmentIdxRange);
 
-
-                        await CombineSegments(jobUuid, segmentIdxRange, filenames[0], filenames[1], outputFilename, finalPath ,encode);
-
-                        Console.WriteLine($"Clip created at {outputFilename}");
+                        if (filenames != null && !_hasDownloadFailed) // Check if downloads were successful AND no download has failed
+                        {
+                            await CombineSegments(jobUuid, segmentIdxRange, filenames[0], filenames[1], outputFilename, finalPath, encode);
+                            Log($"Clip created at {outputFilename}", ConsoleColor.Cyan);
+                        }
+                        else
+                        {
+                            Log("Download failed. Aborting combining segments.", ConsoleColor.Red, true);
+                        }
                     }
                     catch (Exception e)
                     {
-                        DownloadError?.Invoke(null, e.Message);
-                        Console.WriteLine($"Error: {e.Message}");
+                        Log($"Error: {e.Message}", ConsoleColor.Red, true);
+
+                        if (!_isErrorDisplayed)
+                        {
+                            DownloadError?.Invoke(null, $"Error in Clip: {e.Message}");
+                            _isErrorDisplayed = true;
+                        }
                         throw;
                     }
                 }
@@ -303,7 +421,7 @@ namespace BBCD3_Desktop
                         process.Kill();
                     }
 
-                    Console.WriteLine("Clearing temp files...");
+                    Log("Clearing temp files...", ConsoleColor.Cyan);
                     if (Directory.Exists($"{TEMP_DIRECTORY}/{jobUuid}"))
                     {
                         Directory.Delete($"{TEMP_DIRECTORY}/{jobUuid}", true);
@@ -312,8 +430,13 @@ namespace BBCD3_Desktop
             }
             catch (Exception e)
             {
-                DownloadError?.Invoke(null, e.Message);
-                Console.WriteLine($"Error: {e.Message}");
+                Log($"Error: {e.Message}", ConsoleColor.Red, true);
+                if (!_isErrorDisplayed)
+                {
+                    DownloadError?.Invoke(null, $"Error in Clip: {e.Message}");
+                    _isErrorDisplayed = true;
+                }
+
             }
 
         }
@@ -345,8 +468,8 @@ namespace BBCD3_Desktop
 
             if (process.ExitCode != 0)
             {
-                DownloadError?.Invoke(null, error);
-                Console.WriteLine($"Error: {error}");
+                Log($"Error: {error}", ConsoleColor.Red, true);
+                SetDownloadFailed();
                 throw new Exception($"Process failed with exit code {process.ExitCode}");
             }
             else
@@ -355,7 +478,50 @@ namespace BBCD3_Desktop
             }
         }
 
-        
+        static void Log(string message, ConsoleColor color = ConsoleColor.White, bool isError = false)
+        {
+            Console.ForegroundColor = color;
+            Console.WriteLine(message);
+            Console.ResetColor();
+
+            try
+            {
+                using (StreamWriter writer = File.AppendText(_logFilePath))
+                {
+                    writer.WriteLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss} - {message}");
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Error writing to log file: {ex.Message}");
+                StatusUpdate?.Invoke(null, $"[ERROR] Error writing to log file: {ex.Message}");
+            }
+
+            if (isError)
+            {
+                if (!_isErrorDisplayed)
+                {
+                    _isErrorDisplayed = true;  //set true so the message box doesn't reappear
+
+                    StatusUpdate?.Invoke(null, $"[ERROR] {message}");  //Send status in all cases
+
+                    //Raise one *global* error that something has failed in the total process.
+                    DownloadError?.Invoke(null, message);
+                }
+
+            }
+            else
+            {
+                if (message.StartsWith("Attempting to download"))
+                {
+                    StatusUpdate?.Invoke(null, "Downloading segments...");
+                }
+                else if (message.StartsWith("Combining segments"))
+                {
+                    StatusUpdate?.Invoke(null, "Combining segments...");
+                }
+            }
+        }
     }
 
     public static class SOURCES
@@ -366,8 +532,6 @@ namespace BBCD3_Desktop
             { "BBC News (North America) [US Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
             { "BBC Arabic", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
             { "BBC Persian", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
-
-
             { "BBC One London [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
             { "BBC One Wales [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/" } },
             { "BBC One Scotland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/" } },
@@ -379,24 +543,25 @@ namespace BBCD3_Desktop
             { "BBC One North East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_east/" } },
             { "BBC One North West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/" } },
             { "BBC One South [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south/" } },
-            { "BBC One South East [UK Only] ", new Source { UrlPrefix = "https://pub-c2-b4-thdow-bbc.live.bidi.net.uk/vs-cmaf-pushb-uk/x=4/i=urn:bbc:pips:service:bbc_one_south_east/" } },
-            { "BBC One South West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_west/" } },
+            { "BBC One South East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_south_east/" } },
+            { "BBC One South West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_south_west/" } },
             { "BBC One West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west/" } },
             { "BBC One West Midlands [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/" } },
             { "BBC One Yorkshire [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_yorks/" } },
             { "BBC Two England [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/" } },
-            { "BBC Two Northern Ireland [UK Only] ", new Source { UrlPrefix = "https://pub-c4-b7-thdow-bbc.live.bidi.net.uk/vs-cmaf-pushb-uk/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/" } },
+            { "BBC Two Northern Ireland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/" } },
             { "BBC Two Wales [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_wales_digital/" } },
             { "BBC THREE [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_three_hd/" } },
             { "BBC Four [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_four_hd/" } },
             { "CBBC [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbbc_hd/" } },
             { "CBEEBIES [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/" } },
             { "BBC Scotland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_scotland_hd/" } },
-            { "BBC Parliament [UK Only] ", new Source { UrlPrefix = "https://pub-c3-b7-eqsl-bbc.live.bidi.net.uk/vs-cmaf-pushb-uk/x=4/i=urn:bbc:pips:service:bbc_parliament/" } },
-            { "BBC ALBA [UK Only] ", new Source { UrlPrefix = "https://pub-c2-b6-rbsov-bbc.live.bidi.net.uk/vs-cmaf-pushb-uk/x=4/i=urn:bbc:pips:service:bbc_alba/" } },
+            { "BBC Parliament [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_parliament/" } },
+            { "BBC ALBA [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/" } },
             { "S4C [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:s4cpbs/" } },
-            { "BBC STREAM 51", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:ww_bbc_stream_051/" } },
-            { "BBC STREAM 52", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } }
+            { "BBC STREAM 51 [UK Only]", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:ww_bbc_stream_051/" } },
+            { "BBC STREAM 52 [UK Only]", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
+            { "BBC STREAM 53 [UK Only]", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:ww_bbc_stream_053/" } }
 
         };
 
@@ -407,5 +572,4 @@ namespace BBCD3_Desktop
     {
         public string UrlPrefix { get; set; }
     }
-
 }

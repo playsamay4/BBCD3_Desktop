@@ -33,10 +33,11 @@
             <TextBlock Margin="0,10,46,2" TextAlignment="Right" HorizontalAlignment="Right" Width="184" Grid.Column="1"><Run Text="HH               MM               SS"/></TextBlock>
             <TextBlock Margin="0,34,208,2" TextAlignment="Right" HorizontalAlignment="Right" Width="78" Grid.Column="1"><Run Text="Duration:"/></TextBlock>
             <xctk:IntegerUpDown x:Name="DurationMinutes" Value="0" Minimum="0" Maximum="59" Margin="0,36,102,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
-            <xctk:IntegerUpDown x:Name="DurationSeconds" Value="1" Minimum="1" Maximum="59" Margin="0,36,46,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
+            <xctk:IntegerUpDown x:Name="DurationSeconds" Value="0" Minimum="0" Maximum="59" Margin="0,36,46,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
             <xctk:IntegerUpDown x:Name="DurationHours" Value="0" Minimum="0" Maximum="12" Margin="0,36,162,0" VerticalAlignment="Top" HorizontalAlignment="Right" Width="41" Grid.Column="1" BorderBrush="#FF333333" Foreground="White" Background="#FF242424"/>
             <TextBlock x:Name="StatusText" TextAlignment="Left" Margin="0,103,10,0" Text="Status: " FontSize="20" HorizontalAlignment="Right" Width="552"/>
-            <CheckBox x:Name="EncodeCheckbox" Content="Encode (takes longer but allows iOS devices to view recordings)" HorizontalAlignment="Left" Margin="30,69,0,45"/>
+            <CheckBox x:Name="EncodeCheckbox" ToolTip="Takes longer but allows iOS devices to view recordings" Content="Encode" HorizontalAlignment="Left" Margin="30,69,0,45"/>
+            <CheckBox x:Name="FastModeCheckbox" ToolTip="Disable this if you have issues with downloads failing. It will download every segment sequentially, but will take longer." IsChecked="True"  Content="Fast Mode" HorizontalAlignment="Left" Margin="105,69,0,45"/>
             <ProgressBar x:Name="StatusProgress" Margin="236,151,10,-38"  />
 
 

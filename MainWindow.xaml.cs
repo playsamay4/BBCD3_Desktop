@@ -141,19 +141,7 @@ public partial class MainWindow : Window
             return false;
         }
 
-        if (DurationHours.Text == "")
-        {
-            ShowError("Please enter a duration");
-            return false;
-        }
-
-        if (DurationMinutes.Text == "")
-        {
-            ShowError("Please enter a duration" );
-            return false;
-        }
-
-        if (DurationSeconds.Text == "")
+        if (DurationHours.Text == "0" && DurationMinutes.Text == "0" && DurationSeconds.Text == "0")
         {
             ShowError("Please enter a duration");
             return false;
@@ -171,11 +159,12 @@ public partial class MainWindow : Window
             DateTime pickedDate = DatePicker.SelectedDate.Value;
             DateTime pickedTime = (DateTime)StartTimePicker.Value;
             DateTime pickedDateTime = new DateTime(pickedDate.Year, pickedDate.Month, pickedDate.Day, pickedTime.Hour, pickedTime.Minute, pickedTime.Second);
-            //is uk in daylight savings? if so, subtrack 1 hour
+            //is uk in daylight savings? if so, subtract 1 hour
             if (TimeZoneInfo.FindSystemTimeZoneById("GMT Standard Time").IsDaylightSavingTime(pickedDateTime))
             {
                 pickedDateTime = pickedDateTime.AddHours(-1);
             }
+
             //convert to str yyyy-MM-ddTHH:mm:ssZ
             string pickedDateTimeStr = pickedDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
             string channel = ChannelsList.SelectedItem.ToString();
@@ -188,8 +177,9 @@ public partial class MainWindow : Window
             string endTimeStr = endTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
     
             bool encode = EncodeCheckbox.IsChecked.Value;
+            bool fastMode = FastModeCheckbox.IsChecked.Value;
     
-            Downloader.StartDownload(pickedDateTimeStr, endTimeStr, channel, savePath, encode);
+            Downloader.StartDownload(pickedDateTimeStr, endTimeStr, channel, savePath, encode, fastMode);
         }
 
 
