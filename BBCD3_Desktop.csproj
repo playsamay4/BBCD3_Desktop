@@ -10,6 +10,8 @@
         <UseWindowsForms>False</UseWindowsForms>
     </PropertyGroup>
 
+    <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'" />
+
     <ItemGroup>
       <PackageReference Include="Extended.Wpf.Toolkit" Version="4.6.1" />
       <PackageReference Include="PresentationFramework.Aero2" Version="1.0.1" />

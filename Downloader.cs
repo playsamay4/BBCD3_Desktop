@@ -18,7 +18,7 @@ namespace BBCD3_Desktop
         const int MAX_RETRIES = 3;
         const int RETRY_DELAY_MS = 1000;
         public static bool FAST_MODE = true;  // Fast mode (Parallel Downloads) Stable Mode (Sequential Downloads)
-        private static string _logFilePath = Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location), "download_log.txt");
+        private static readonly string _logFilePath;
         private static bool _isErrorDisplayed = false; // Static to persist across Clip calls within a download.
         private static bool _hasDownloadFailed = false; // Flag to signal a download failure.
 
@@ -26,6 +26,14 @@ namespace BBCD3_Desktop
         public static event EventHandler<string> StatusUpdate;
         public static event EventHandler<string> DownloadError;
         public static event EventHandler<int> ProgressUpdated;
+
+        static Downloader()
+        {
+            string appFolder = AppDomain.CurrentDomain.BaseDirectory;
+            string logsFolder = Path.Combine(appFolder, "logs");
+            Directory.CreateDirectory(logsFolder); 
+            _logFilePath = Path.Combine(logsFolder, "download_log.txt");
+        }
 
         public static async Task StartDownload(string startTimeStr, string endTimeStr, string channel, string finalPath, bool encode, bool fastMode)
         {
@@ -73,6 +81,7 @@ namespace BBCD3_Desktop
 
                     using (HttpClient client = new HttpClient())
                     {
+                        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0");
                         var response = await client.GetAsync(url);
 
                         if (response.IsSuccessStatusCode)
@@ -97,11 +106,13 @@ namespace BBCD3_Desktop
                     }
                 }
                 catch (Exception ex)
-                {
+                {   
+                    Debug.WriteLine($"Exception during download of {url}: {ex.Message}");
                     Log($"Exception during download of {url}: {ex.Message}", ConsoleColor.Red);
                     retries++;
                     if (retries < MAX_RETRIES)
                     {
+                        Debug.WriteLine($"Retrying download of {url} in {RETRY_DELAY_MS}ms...");
                         Log($"Retrying in {RETRY_DELAY_MS}ms...", ConsoleColor.DarkYellow);
                         await Task.Delay(RETRY_DELAY_MS);
                     }
@@ -481,7 +492,7 @@ namespace BBCD3_Desktop
         static void Log(string message, ConsoleColor color = ConsoleColor.White, bool isError = false)
         {
             Console.ForegroundColor = color;
-            Console.WriteLine(message);
+            Debug.WriteLine(message);
             Console.ResetColor();
 
             try
@@ -493,7 +504,7 @@ namespace BBCD3_Desktop
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Error writing to log file: {ex.Message}");
+                Debug.WriteLine($"Error writing to log file: {ex.Message}");
                 StatusUpdate?.Invoke(null, $"[ERROR] Error writing to log file: {ex.Message}");
             }
 
@@ -530,6 +541,7 @@ namespace BBCD3_Desktop
         {
             { "BBC News (United Kingdom)", new Source { UrlPrefix = "https://vs-cmaf-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/" } },
             { "BBC News (North America) [US Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
+            { "BBC News (Africa) [Australia Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-apac-gcomm.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_world_news_africa/pc_hd_abr_v2.mpd" } },
             { "BBC Arabic", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
             { "BBC Persian", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
             { "BBC One London [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
