@@ -4,6 +4,9 @@
     <_LastSelectedProfileId>D:\dev\BBCD3_Desktop\Properties\PublishProfiles\FolderProfile.pubxml</_LastSelectedProfileId>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Update="PrettyDialog.xaml.cs">
+      <SubType>Code</SubType>
+    </Compile>
     <Compile Update="PrettyError.xaml.cs">
       <SubType>Code</SubType>
     </Compile>

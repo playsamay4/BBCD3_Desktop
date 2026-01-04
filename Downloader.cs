@@ -7,16 +7,19 @@ using System.Linq;
 using System.Net.Http;
 using System.Reflection;
 using System.Text;
-using System.Threading.Tasks;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace BBCD3_Desktop
 {
     public class Downloader
     {
         public static string TEMP_DIRECTORY = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location) + "\\TempFiles";
+
         const int MAX_RETRIES = 3;
         const int RETRY_DELAY_MS = 1000;
+        const int _CONCURRENT_DOWNLOAD_LIMIT = 5;
+
         public static bool FAST_MODE = true;  // Fast mode (Parallel Downloads) Stable Mode (Sequential Downloads)
         private static readonly string _logFilePath;
         private static bool _isErrorDisplayed = false; // Static to persist across Clip calls within a download.
@@ -154,40 +157,69 @@ namespace BBCD3_Desktop
                 return null;
             }
 
-            // Calculate total segments for progress reporting.
+            //Calculate total segments for progress reporting.
             int totalSegments = (segmentIdxRange[1] - segmentIdxRange[0] + 1) * 2;
 
-            // Track completed segment downloads
+            //Track completed segment downloads
             int completedSegments = 0;
 
             if (FAST_MODE)
             {
-                Log("Downloading segments in FAST MODE (parallel downloads)...", ConsoleColor.Magenta);
+                Log("Downloading segments in FAST MODE (Limited Concurrency)...", ConsoleColor.Magenta);
 
-                List<Task> downloadTasks = new List<Task>();
-                for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
+                
+                using (var semaphore = new SemaphoreSlim(_CONCURRENT_DOWNLOAD_LIMIT))
                 {
-                    string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{segmentIdx}.m4s";
-                    string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
-                    string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{segmentIdx}.m4s";
-                    string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
+                    var tasks = new List<Task>();
 
-                    // Stop if a download has failed
-                    if (_hasDownloadFailed) break;
+                    for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
+                    {
+                        if (_hasDownloadFailed) break;
 
-                    downloadTasks.Add(DownloadSegmentAsync(videoUrl, videoFilename, () =>
-                    {
-                        Interlocked.Increment(ref completedSegments);
-                        UpdateProgress(completedSegments, totalSegments);
-                    }));
-                    downloadTasks.Add(DownloadSegmentAsync(audioUrl, audioFilename, () =>
-                    {
-                        Interlocked.Increment(ref completedSegments);
-                        UpdateProgress(completedSegments, totalSegments);
-                    }));
+                       
+                        int idx = segmentIdx;
+
+                        //vid  task
+                        tasks.Add(Task.Run(async () =>
+                        {
+                            await semaphore.WaitAsync();
+                            try
+                            {
+                                if (_hasDownloadFailed) return;
+                                string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{idx}.m4s";
+                                string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{idx}.m4s";
+
+                                await DownloadSegmentAsync(videoUrl, videoFilename, () =>
+                                {
+                                    Interlocked.Increment(ref completedSegments);
+                                    UpdateProgress(completedSegments, totalSegments);
+                                });
+                            }
+                            finally { semaphore.Release(); }
+                        }));
+
+                        //audio task
+                        tasks.Add(Task.Run(async () =>
+                        {
+                            await semaphore.WaitAsync();
+                            try
+                            {
+                                if (_hasDownloadFailed) return;
+                                string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{idx}.m4s";
+                                string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{idx}.m4s";
+
+                                await DownloadSegmentAsync(audioUrl, audioFilename, () =>
+                                {
+                                    Interlocked.Increment(ref completedSegments);
+                                    UpdateProgress(completedSegments, totalSegments);
+                                });
+                            }
+                            finally { semaphore.Release(); }
+                        }));
+                    }
+
+                    await Task.WhenAll(tasks);
                 }
-                await Task.WhenAll(downloadTasks);
-
             }
             else
             {
@@ -220,9 +252,9 @@ namespace BBCD3_Desktop
                 }
             }
 
-            if (_hasDownloadFailed) // Check if downloads were aborted
+            if (_hasDownloadFailed)
             {
-                return null; // Do not pass incomplete downloads to combine
+                return null; 
             }
 
             return new[] { videoInitFilename, audioInitFilename };
@@ -239,14 +271,14 @@ namespace BBCD3_Desktop
             }
             else
             {
-                SetDownloadFailed(); // Signal the download failure in parallel.
+                SetDownloadFailed(); 
             }
         }
 
         static void SetDownloadFailed()
         {
             _hasDownloadFailed = true;
-            SetErrorDisplayed(); // Also make sure error flag is set
+            SetErrorDisplayed();
         }
 
         static void SetErrorDisplayed()
@@ -269,113 +301,69 @@ namespace BBCD3_Desktop
             if (_hasDownloadFailed)
             {
                 Log("Skipping combining segments due to download failure.", ConsoleColor.DarkGray);
-                return; // Abort combining segments.
+                return;
             }
 
-            Log("Combining segments...", ConsoleColor.Cyan);
+            Log("Combining segments (Binary Stitching)...", ConsoleColor.Cyan);
             StatusUpdate?.Invoke(null, "Combining segments...");
 
-            List<string> videoFileList = new List<string>() { videoInitFilename };
-            List<string> audioFileList = new List<string>() { audioInitFilename };
+            List<string> videoFiles = new List<string> { videoInitFilename };
+            List<string> audioFiles = new List<string> { audioInitFilename };
 
             for (int number = segmentIdxRange[0]; number <= segmentIdxRange[1]; number++)
             {
-                string videoSegmentPath = $"{TEMP_DIRECTORY}/{jobUuid}/video_{number}.m4s";
-                string audioSegmentPath = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{number}.m4s";
+                string vPath = $"{TEMP_DIRECTORY}/{jobUuid}/video_{number}.m4s";
+                string aPath = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{number}.m4s";
 
-                if (File.Exists(videoSegmentPath))
-                {
-                    Log($"Adding video segment {number} to the concatenation...", ConsoleColor.Green);
-                    videoFileList.Add(videoSegmentPath);
-                }
-                else
-                {
-                    Log($"Video segment {number} not found, skipping.", ConsoleColor.DarkGray);
-                }
-
-                if (File.Exists(audioSegmentPath))
-                {
-                    Log($"Adding audio segment {number} to the concatenation...", ConsoleColor.Green);
-                    audioFileList.Add(audioSegmentPath);
-                }
-                else
-                {
-                    Log($"Audio segment {number} not found, skipping.", ConsoleColor.DarkGray);
-                }
+                if (File.Exists(vPath)) videoFiles.Add(vPath);
+                if (File.Exists(aPath)) audioFiles.Add(aPath);
             }
-
-            string videoFiles = "concat:" + string.Join("|", videoFileList);
-            string audioFiles = "concat:" + string.Join("|", audioFileList);
 
             string concatenatedVideoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_full.mp4";
             string concatenatedAudioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_full.mp4";
 
-            string[] concatCommands = {
-            $"-loglevel quiet -i \"{videoFiles}\" -c copy {concatenatedVideoFilename}",
-            $"-loglevel quiet -i \"{audioFiles}\" -c copy {concatenatedAudioFilename}"
-        };
-
-            List<Task> ffmpegTasks = new List<Task>();
-
-            Log($"Running command: {concatCommands[0]}", ConsoleColor.White);
-            Process process = new Process
+            try
             {
-                StartInfo =
-                {
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true,
-                    FileName = "ffmpeg",
-                    Arguments = concatCommands[0]
-                }
-            };
-            process.Start();
-            process.WaitForExit();
+                Log($"Stitching {videoFiles.Count} video segments...", ConsoleColor.White);
+                await MergeFilesAsync(videoFiles, concatenatedVideoFilename);
 
-            Log($"Running command: {concatCommands[1]}", ConsoleColor.White);
-            Process processAudio = new Process
+                Log($"Stitching {audioFiles.Count} audio segments...", ConsoleColor.White);
+                await MergeFilesAsync(audioFiles, concatenatedAudioFilename);
+            }
+            catch (Exception ex)
             {
-                StartInfo =
-                {
-                    UseShellExecute = false,
-                    RedirectStandardOutput = true,
-                    CreateNoWindow = true,
-                    FileName = "ffmpeg",
-                    Arguments = concatCommands[1]
-                }
-            };
-            processAudio.Start();
-            processAudio.WaitForExit();
+                Log($"Error stitching files: {ex.Message}", ConsoleColor.Red, true);
+                throw;
+            }
 
-            Log("Concatenation complete", ConsoleColor.Cyan);
-
-            await Task.Delay(1000);
-
+            //merge
             string finalCommand;
+
+            Log("Merges complete. Processing with FFmpeg...", ConsoleColor.Cyan);
             StatusUpdate?.Invoke(null, $"Joining video and audio...");
+
             if (encode)
             {
-                finalCommand = $"-loglevel quiet -i {concatenatedVideoFilename} -i {concatenatedAudioFilename} -c:v libx264 -c:a copy {outputFilename}";
-                Log($"Running command: {finalCommand}", ConsoleColor.White);
+                finalCommand = $"-i \"{concatenatedVideoFilename}\" -i \"{concatenatedAudioFilename}\" -c:v libx264 -c:a copy \"{outputFilename}\"";
+                Log($"Encoding... This may take a while!!", ConsoleColor.Yellow);
                 StatusUpdate?.Invoke(null, $"Encoding... This may take a while!!");
-                await RunProcess(finalCommand);
-
             }
             else
             {
-                finalCommand = $"-loglevel quiet -i {concatenatedVideoFilename} -i {concatenatedAudioFilename} -c:v copy -c:a copy {outputFilename}";
-                Log($"Running command: {finalCommand}", ConsoleColor.White);
-                await RunProcess(finalCommand);
+                finalCommand = $"-i \"{concatenatedVideoFilename}\" -i \"{concatenatedAudioFilename}\" -c:v copy -c:a copy \"{outputFilename}\"";
+                Log($"Multiplexing streams...", ConsoleColor.White);
             }
+
+            await RunProcess(finalCommand);
 
             StatusUpdate?.Invoke(null, $"Cleaning up...");
             Log("Cleaning up...", ConsoleColor.Cyan);
 
-            //copy the file to desired directory
-            File.Copy(outputFilename, Path.Combine(Path.GetFullPath(finalPath), Path.GetFileName(outputFilename)), true);
+            string destPath = Path.Combine(Path.GetFullPath(finalPath), Path.GetFileName(outputFilename));
+            File.Copy(outputFilename, destPath, true);
 
             StatusUpdate?.Invoke(null, $"Finished :)");
-            Log("Cleanup complete", ConsoleColor.Cyan);
+            Log($"Cleanup complete. Saved to {destPath}", ConsoleColor.Green);
         }
 
         static async Task Clip(string channel, long startTimestamp, long endTimestamp, string jobUuid, string finalPath, bool encode)
@@ -464,7 +452,7 @@ namespace BBCD3_Desktop
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "ffmpeg",
-                    Arguments = $"{command}",
+                    Arguments = command, // Note: No extra quotes here; they are in the command string already
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -473,19 +461,48 @@ namespace BBCD3_Desktop
             };
 
             process.Start();
-            string output = await process.StandardOutput.ReadToEndAsync();
-            string error = await process.StandardError.ReadToEndAsync();
+
+            // read Output and Error streams asynchronously in parallel
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+
+            await Task.WhenAll(outputTask, errorTask);
             await process.WaitForExitAsync();
+
+            string output = outputTask.Result;
+            string error = errorTask.Result;
 
             if (process.ExitCode != 0)
             {
-                Log($"Error: {error}", ConsoleColor.Red, true);
+                Log($"FFmpeg Error Output: {error}", ConsoleColor.Red, true);
                 SetDownloadFailed();
-                throw new Exception($"Process failed with exit code {process.ExitCode}");
+                throw new Exception($"Process failed with exit code {process.ExitCode}. Check logs.");
             }
             else
             {
-                Console.WriteLine(output);
+                if (!string.IsNullOrWhiteSpace(error))
+                {
+                    Debug.WriteLine($"FFmpeg Info: {error}");
+                }
+            }
+        }
+
+        static async Task MergeFilesAsync(List<string> sourceFiles, string outputFile)
+        {
+            //output file stream
+            using (var outputStream = new FileStream(outputFile, FileMode.Create, FileAccess.Write, FileShare.None))
+            {
+                foreach (var file in sourceFiles)
+                {
+                    if (File.Exists(file))
+                    {
+                        //copy bytes to the output file
+                        using (var inputStream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read))
+                        {
+                            await inputStream.CopyToAsync(outputStream);
+                        }
+                    }
+                }
             }
         }
 
@@ -512,11 +529,10 @@ namespace BBCD3_Desktop
             {
                 if (!_isErrorDisplayed)
                 {
-                    _isErrorDisplayed = true;  //set true so the message box doesn't reappear
+                    _isErrorDisplayed = true;
 
-                    StatusUpdate?.Invoke(null, $"[ERROR] {message}");  //Send status in all cases
+                    StatusUpdate?.Invoke(null, $"[ERROR] {message}");  
 
-                    //Raise one *global* error that something has failed in the total process.
                     DownloadError?.Invoke(null, message);
                 }
 
@@ -542,9 +558,9 @@ namespace BBCD3_Desktop
             { "BBC News (United Kingdom)", new Source { UrlPrefix = "https://vs-cmaf-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/" } },
             { "BBC News (North America) [US Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
             { "BBC News (Africa) [Australia Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-apac-gcomm.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_world_news_africa/pc_hd_abr_v2.mpd" } },
-            { "BBC Arabic", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
-            { "BBC Persian", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
-            { "BBC One London [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
+            { "BBC Arabic", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
+            { "BBC Persian", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
+            { "BBC One London [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
             { "BBC One Wales [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/" } },
             { "BBC One Scotland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/" } },
             { "BBC One Northern Ireland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_northern_ireland_hd/" } },
@@ -552,28 +568,50 @@ namespace BBCD3_Desktop
             { "BBC One East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east/" } },
             { "BBC One East Midlands [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_midlands/" } },
             { "BBC One East Yorkshire & Lincolnshire [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_yorkshire/" } },
-            { "BBC One North East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_east/" } },
-            { "BBC One North West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/" } },
+            { "BBC One North East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_north_east/" } },
+            { "BBC One North West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/" } },
             { "BBC One South [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south/" } },
-            { "BBC One South East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_south_east/" } },
-            { "BBC One South West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_south_west/" } },
+            { "BBC One South East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_east/" } },
+            { "BBC One South West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_west/" } },
             { "BBC One West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west/" } },
-            { "BBC One West Midlands [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/" } },
+            { "BBC One West Midlands [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/" } },
             { "BBC One Yorkshire [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_yorks/" } },
-            { "BBC Two England [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/" } },
-            { "BBC Two Northern Ireland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/" } },
+            { "BBC Two England [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/" } },
+            { "BBC Two Northern Ireland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/" } },
             { "BBC Two Wales [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_wales_digital/" } },
-            { "BBC THREE [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_three_hd/" } },
+            { "BBC THREE [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_three_hd/" } },
             { "BBC Four [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_four_hd/" } },
-            { "CBBC [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbbc_hd/" } },
-            { "CBEEBIES [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/" } },
+            { "CBBC [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:cbbc_hd/" } },
+            { "CBEEBIES [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/" } },
             { "BBC Scotland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_scotland_hd/" } },
-            { "BBC Parliament [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_parliament/" } },
-            { "BBC ALBA [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/" } },
-            { "S4C [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:s4cpbs/" } },
-            { "BBC STREAM 51 [UK Only]", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:ww_bbc_stream_051/" } },
-            { "BBC STREAM 52 [UK Only]", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
-            { "BBC STREAM 53 [UK Only]", new Source { UrlPrefix = "https://ve-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:ww_bbc_stream_053/" } }
+            { "BBC Parliament [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_parliament/" } },
+            { "BBC ALBA [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/" } },
+            { "S4C [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:s4cpbs/" } },
+            { "BBC STREAM 51 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
+            { "BBC STREAM 52 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
+            { "BBC STREAM 53 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
+            { "BBC STREAM 54 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
+            { "BBC STREAM 55 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
+            { "BBC STREAM 56 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
+            { "BBC STREAM 57 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
+            { "BBC STREAM 58 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
+            { "BBC STREAM 59 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
+            { "BBC STREAM 51 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
+            { "BBC STREAM 52 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
+            { "BBC STREAM 53 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
+            { "BBC STREAM 54 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
+            { "BBC STREAM 55 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
+            { "BBC STREAM 56 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
+            { "BBC STREAM 57 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
+            { "BBC STREAM 58 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
+            { "BBC STREAM 59 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
+            { "World Service Stream 05 (Urdu, Pashto, Burmese, Swahili, Arabic Services)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_05/" } },
+            { "World Service Stream 06 (Telugu, Tamil, Kyrgyz, Hindi, Ukranian Services)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_06/" } },
+            { "World Service Stream 07 (Afghan Service Retransmission)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_07/" } },
+            { "World Service Stream 08 (BBC News Asia Pacific)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_08/" } },
+            { "BBC Afghanistan", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_afghan_tv/" } },
+
+
 
         };
 

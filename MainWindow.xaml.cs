@@ -20,6 +20,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
 
+        _ = CheckUpdatesSilent();
+
         // logs directory in application folder
         string appFolder = AppDomain.CurrentDomain.BaseDirectory;
         string logsFolder = Path.Combine(appFolder, "logs");
@@ -183,8 +185,9 @@ public partial class MainWindow : Window
         }
 
 
-    private void ComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private async Task CheckUpdatesSilent()
     {
-
+        await Task.Delay(500);
+        await UpdateChecker.CheckForUpdatesAsync();
     }
 }

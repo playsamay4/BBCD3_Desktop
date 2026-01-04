@@ -8,6 +8,8 @@
         <UseWPF>true</UseWPF>
         <ApplicationIcon>bbcd_logo-white_with_bg.ico</ApplicationIcon>
         <UseWindowsForms>False</UseWindowsForms>
+
+		<Version>4</Version>
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'" />
