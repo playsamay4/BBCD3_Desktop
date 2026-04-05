@@ -38,10 +38,18 @@ namespace BBCD3_Desktop
             _logFilePath = Path.Combine(logsFolder, "download_log.txt");
         }
 
-        public static async Task StartDownload(string startTimeStr, string endTimeStr, string channel, string finalPath, bool encode, bool fastMode)
+        public static async Task StartDownload(string startTimeStr, string endTimeStr, string sourceId, string finalPath, bool encode, bool fastMode)
         {
+
+            var source = SOURCES.GetSource(sourceId);
+            if (source == null)
+            {
+                DownloadError?.Invoke(null, $"Invalid source ID: {sourceId}");
+                return;
+            }
+
             FAST_MODE = fastMode;
-            StatusUpdate?.Invoke(null, "Starting download...");
+            StatusUpdate?.Invoke(null, $"Starting download {source.Name} ...");
 
             try
             {
@@ -64,16 +72,12 @@ namespace BBCD3_Desktop
             _isErrorDisplayed = false; // Reset at the start of each *full* download.
             _hasDownloadFailed = false; // Reset at the start of each full download.
 
-            await Clip(channel, startTimestamp, endTimestamp, jobUuid, finalPath, encode);
+            await Clip(source, startTimestamp, endTimestamp, jobUuid, finalPath, encode);
         }
 
         static async Task<bool> DownloadSegmentWithRetry(string url, string filename)
         {
-            if (_hasDownloadFailed) // Short-circuit if another download has failed
-            {
-                Log($"Skipping download {url} due to previous failure.", ConsoleColor.DarkGray);
-                return false;
-            }
+            if (_hasDownloadFailed) return false;
 
             int retries = 0;
             while (retries < MAX_RETRIES)
@@ -127,12 +131,12 @@ namespace BBCD3_Desktop
             return false;
         }
 
-        static async Task<string[]> DownloadSegments(string channel, string jobUuid, int[] segmentIdxRange)
+        static async Task<string[]> DownloadSegments(Source source, string jobUuid, int[] segmentIdxRange)
         {
-            string urlPrefix = SOURCES.GetSource(channel).UrlPrefix;
+            string urlPrefix = source.UrlPrefix;
 
-            string videoInitUrl = $"{urlPrefix}v=pv14/b=5070016/segment.init";
-            string audioInitUrl = $"{urlPrefix}a=pa3/al=en-GB/ap=main/b=96000/segment.init";
+            string videoInitUrl = $"{urlPrefix}{source.VideoPath}/segment.init";
+            string audioInitUrl = $"{urlPrefix}{source.AudioPath}/segment.init";
 
             string videoInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_init.m4s";
             string audioInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_init.m4s";
@@ -186,7 +190,7 @@ namespace BBCD3_Desktop
                             try
                             {
                                 if (_hasDownloadFailed) return;
-                                string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{idx}.m4s";
+                                string videoUrl = $"{urlPrefix}t=3840/{source.VideoPath}/{idx}.m4s";
                                 string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{idx}.m4s";
 
                                 await DownloadSegmentAsync(videoUrl, videoFilename, () =>
@@ -205,7 +209,7 @@ namespace BBCD3_Desktop
                             try
                             {
                                 if (_hasDownloadFailed) return;
-                                string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{idx}.m4s";
+                                string audioUrl = $"{urlPrefix}t=3840/{source.AudioPath}/{idx}.m4s";
                                 string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{idx}.m4s";
 
                                 await DownloadSegmentAsync(audioUrl, audioFilename, () =>
@@ -230,7 +234,7 @@ namespace BBCD3_Desktop
                     // Stop if a download has failed
                     if (_hasDownloadFailed) break;
 
-                    string videoUrl = $"{urlPrefix}t=3840/v=pv14/b=5070016/{segmentIdx}.m4s";
+                    string videoUrl = $"{urlPrefix}t=3840/{source.VideoPath}/{segmentIdx}.m4s";
                     string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
                     Log($"Downloading video segment {segmentIdx}...", ConsoleColor.White);
                     bool videoSuccess = await DownloadSegmentWithRetry(videoUrl, videoFilename);
@@ -240,7 +244,7 @@ namespace BBCD3_Desktop
                         UpdateProgress(completedSegments, totalSegments);
                     }
 
-                    string audioUrl = $"{urlPrefix}t=3840/a=pa3/al=en-GB/ap=main/b=96000/{segmentIdx}.m4s";
+                    string audioUrl = $"{urlPrefix}t=3840/{source.AudioPath}/{segmentIdx}.m4s";
                     string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
                     Log($"Downloading audio segment {segmentIdx}...", ConsoleColor.White);
                     bool audioSuccess = await DownloadSegmentWithRetry(audioUrl, audioFilename);
@@ -366,17 +370,19 @@ namespace BBCD3_Desktop
             Log($"Cleanup complete. Saved to {destPath}", ConsoleColor.Green);
         }
 
-        static async Task Clip(string channel, long startTimestamp, long endTimestamp, string jobUuid, string finalPath, bool encode)
+        static async Task Clip(Source source, long startTimestamp, long endTimestamp, string jobUuid, string finalPath, bool encode)
         {
-            string fancyName = $"{channel}_{startTimestamp}_{endTimestamp}.mp4";
-            fancyName = fancyName.Replace(" ", "-").Replace("-[UK-Only]-", "").Replace("-[US-Only]-", "");
+            string fancyName = $"{source.Id}_{startTimestamp}_{endTimestamp}.mp4";
+            fancyName =
+                fancyName.Replace(" ", "-");
+                
             string outputFilename = $"{TEMP_DIRECTORY}/{jobUuid}/{fancyName}";
 
             try
             {
                 try
                 {
-                    Log($"Starting clip from channel {channel} from {startTimestamp}-{endTimestamp} with UUID {jobUuid}", ConsoleColor.Cyan);
+                    Log($"Starting clip from channel {source.Name} from {startTimestamp}-{endTimestamp} with UUID {jobUuid}", ConsoleColor.Cyan);
 
                     int[] segmentIdxRange = Array.ConvertAll(new[] { startTimestamp, endTimestamp },
                         bound => CalculateSegmentIdx(bound + 38));
@@ -387,7 +393,7 @@ namespace BBCD3_Desktop
                     }
                     try
                     {
-                        var filenames = await DownloadSegments(channel, jobUuid, segmentIdxRange);
+                        var filenames = await DownloadSegments(source, jobUuid, segmentIdxRange);
 
                         if (filenames != null && !_hasDownloadFailed) // Check if downloads were successful AND no download has failed
                         {
@@ -555,71 +561,124 @@ namespace BBCD3_Desktop
     {
         public static Dictionary<string, Source> All = new Dictionary<string, Source>
         {
-            { "BBC News (United Kingdom)", new Source { UrlPrefix = "https://vs-cmaf-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/" } },
-            { "BBC News (North America) [US Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
-            { "BBC News (Africa) [Australia Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-apac-gcomm.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_world_news_africa/pc_hd_abr_v2.mpd" } },
-            { "BBC Arabic", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
-            { "BBC Persian", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
-            { "BBC One London [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
-            { "BBC One Wales [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/" } },
-            { "BBC One Scotland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/" } },
-            { "BBC One Northern Ireland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_northern_ireland_hd/" } },
-            { "BBC One Channel Islands [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_channel_islands/" } },
-            { "BBC One East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east/" } },
-            { "BBC One East Midlands [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_midlands/" } },
-            { "BBC One East Yorkshire & Lincolnshire [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_yorkshire/" } },
-            { "BBC One North East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_north_east/" } },
-            { "BBC One North West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/" } },
-            { "BBC One South [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south/" } },
-            { "BBC One South East [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_east/" } },
-            { "BBC One South West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_west/" } },
-            { "BBC One West [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west/" } },
-            { "BBC One West Midlands [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/" } },
-            { "BBC One Yorkshire [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_yorks/" } },
-            { "BBC Two England [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/" } },
-            { "BBC Two Northern Ireland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/" } },
-            { "BBC Two Wales [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_wales_digital/" } },
-            { "BBC THREE [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_three_hd/" } },
-            { "BBC Four [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_four_hd/" } },
-            { "CBBC [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:cbbc_hd/" } },
-            { "CBEEBIES [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/" } },
-            { "BBC Scotland [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_scotland_hd/" } },
-            { "BBC Parliament [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_parliament/" } },
-            { "BBC ALBA [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/" } },
-            { "S4C [UK Only] ", new Source { UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:s4cpbs/" } },
-            { "BBC STREAM 51 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
-            { "BBC STREAM 52 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
-            { "BBC STREAM 53 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
-            { "BBC STREAM 54 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
-            { "BBC STREAM 55 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
-            { "BBC STREAM 56 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
-            { "BBC STREAM 57 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
-            { "BBC STREAM 58 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
-            { "BBC STREAM 59 UK [UK Only]", new Source { UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
-            { "BBC STREAM 51 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
-            { "BBC STREAM 52 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
-            { "BBC STREAM 53 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
-            { "BBC STREAM 54 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
-            { "BBC STREAM 55 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
-            { "BBC STREAM 56 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
-            { "BBC STREAM 57 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
-            { "BBC STREAM 58 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
-            { "BBC STREAM 59 Worldwide", new Source { UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
-            { "World Service Stream 05 (Urdu, Pashto, Burmese, Swahili, Arabic Services)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_05/" } },
-            { "World Service Stream 06 (Telugu, Tamil, Kyrgyz, Hindi, Ukranian Services)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_06/" } },
-            { "World Service Stream 07 (Afghan Service Retransmission)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_07/" } },
-            { "World Service Stream 08 (BBC News Asia Pacific)", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_08/" } },
-            { "BBC Afghanistan", new Source { UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_afghan_tv/" } },
+            // BBC News
+            { "news_uk", new Source { Id = "news_uk", Name = "BBC News UK", Category = "News", UrlPrefix = "https://vs-cmaf-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/" } },
+            { "news_uk_fhd", new Source {
+                Id = "news_uk_fhd",
+                Name = "BBC News UK",
+                Category = "News FHD",
+                UrlPrefix = "https://vs-cmaf-push-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/",
+                VideoPath = "v=pv66/b=6500000",
+                AudioPath = "a=pa6/al=en-GB/ap=main/b=320000"
+            } },
+            { "news_na", new Source { Id = "news_na", Name = "BBC News World (North America) [US-Only Geoblock]", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
+            { "news_af", new Source { Id = "news_af", Name = "BBC News World (Africa) [Australia-Only Geoblock]", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-apac-gcomm.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_world_news_africa/" } },
+            { "news_ar", new Source { Id = "news_ar", Name = "BBC News Arabic", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
+            { "news_fa", new Source { Id = "news_fa", Name = "BBC News Persian", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
 
+            //BBC One HD
+            { "one_lon", new Source { Id = "one_lon", Name = "BBC One London [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
+            { "one_wal", new Source { Id = "one_wal", Name = "BBC One Wales [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/" } },
+            { "one_sco", new Source { Id = "one_sco", Name = "BBC One Scotland [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/" } },
+            { "one_ni",  new Source { Id = "one_ni",  Name = "BBC One Northern Ireland [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_northern_ireland_hd/" } },
+            { "one_ci",  new Source { Id = "one_ci",  Name = "BBC One Channel Islands [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_channel_islands/" } },
+            { "one_east", new Source { Id = "one_east", Name = "BBC One East [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east/" } },
+            { "one_em", new Source { Id = "one_em", Name = "BBC One East Midlands [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_midlands/" } },
+            { "one_ey", new Source { Id = "one_ey", Name = "BBC One East Yorks & Lincs [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_yorkshire/" } },
+            { "one_ne", new Source { Id = "one_ne", Name = "BBC One North East [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_north_east/" } },
+            { "one_nw", new Source { Id = "one_nw", Name = "BBC One North West [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/" } },
+            { "one_sou", new Source { Id = "one_sou", Name = "BBC One South [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south/" } },
+            { "one_se", new Source { Id = "one_se", Name = "BBC One South East [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_east/" } },
+            { "one_sw", new Source { Id = "one_sw", Name = "BBC One South West [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_west/" } },
+            { "one_wes", new Source { Id = "one_wes", Name = "BBC One West [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west/" } },
+            { "one_wm", new Source { Id = "one_wm", Name = "BBC One West Midlands [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/" } },
+            { "one_yor", new Source { Id = "one_yor", Name = "BBC One Yorkshire [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_yorks/" } },
 
+            // BBC ONE FHD
+            { "one_lon_fhd", new Source { Id = "one_lon_fhd", Name = "BBC One London [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_wal_fhd", new Source { Id = "one_wal_fhd", Name = "BBC One Wales [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_sco_fhd", new Source { Id = "one_sco_fhd", Name = "BBC One Scotland [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_ni_fhd",  new Source { Id = "one_ni_fhd",  Name = "BBC One Northern Ireland [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_northern_ireland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_ci_fhd",  new Source { Id = "one_ci_fhd",  Name = "BBC One Channel Islands [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_channel_islands/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_east_fhd", new Source { Id = "one_east_fhd", Name = "BBC One East [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_em_fhd", new Source { Id = "one_em_fhd", Name = "BBC One East Midlands [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_midlands/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_ey_fhd", new Source { Id = "one_ey_fhd", Name = "BBC One East Yorks & Lincs [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_yorkshire/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_ne_fhd", new Source { Id = "one_ne_fhd", Name = "BBC One North East [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_east/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_nw_fhd", new Source { Id = "one_nw_fhd", Name = "BBC One North West [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_sou_fhd", new Source { Id = "one_sou_fhd", Name = "BBC One South [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_se_fhd", new Source { Id = "one_se_fhd", Name = "BBC One South East [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_east/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_sw_fhd", new Source { Id = "one_sw_fhd", Name = "BBC One South West [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_west/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_wes_fhd", new Source { Id = "one_wes_fhd", Name = "BBC One West [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_wm_fhd", new Source { Id = "one_wm_fhd", Name = "BBC One West Midlands [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "one_yor_fhd", new Source { Id = "one_yor_fhd", Name = "BBC One Yorkshire [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_yorks/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
 
+            // Other bbc HD
+            { "two_eng", new Source { Id = "two_eng", Name = "BBC Two England [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/" } },
+            { "two_ni", new Source { Id = "two_ni", Name = "BBC Two Northern Ireland [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/" } },
+            { "two_wal", new Source { Id = "two_wal", Name = "BBC Two Wales [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_wales_digital/" } },
+            { "three", new Source { Id = "three", Name = "BBC THREE [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_three_hd/" } },
+            { "four", new Source { Id = "four", Name = "BBC Four [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_four_hd/" } },
+            { "cbbc", new Source { Id = "cbbc", Name = "CBBC [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:cbbc_hd/" } },
+            { "cbeebies", new Source { Id = "cbeebies", Name = "CBEEBIES [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/" } },
+            { "scotland", new Source { Id = "scotland", Name = "BBC Scotland [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_scotland_hd/" } },
+            { "parliament", new Source { Id = "parliament", Name = "BBC Parliament [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_parliament/" } },
+            { "alba", new Source { Id = "alba", Name = "BBC ALBA [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/" } },
+
+            //Other bbc fhd
+            { "two_eng_fhd", new Source { Id = "two_eng_fhd", Name = "BBC Two England [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "two_ni_fhd", new Source { Id = "two_ni_fhd", Name = "BBC Two Northern Ireland [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "two_wal_fhd", new Source { Id = "two_wal_fhd", Name = "BBC Two Wales [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_wales_digital/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "three_fhd", new Source { Id = "three_fhd", Name = "BBC THREE [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_three_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "four_fhd", new Source { Id = "four_fhd", Name = "BBC Four [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_four_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "cbbc_fhd", new Source { Id = "cbbc_fhd", Name = "CBBC [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbbc_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "cbeebies_fhd", new Source { Id = "cbeebies_fhd", Name = "CBEEBIES [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "scotland_fhd", new Source { Id = "scotland_fhd", Name = "BBC Scotland [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_scotland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "parliament_fhd", new Source { Id = "parliament_fhd", Name = "BBC Parliament [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_parliament/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+            { "alba_fhd", new Source { Id = "alba_fhd", Name = "BBC ALBA [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
+
+            { "s4c", new Source { Id = "s4c", Name = "S4C [UK Only]", Category = "S4C", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:s4cpbs/" } },
+
+            // streams 
+            { "stream_51_uk", new Source { Id = "stream_51_uk", Name = "BBC STREAM 51 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
+            { "stream_52_uk", new Source { Id = "stream_52_uk", Name = "BBC STREAM 52 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
+            { "stream_53_uk", new Source { Id = "stream_53_uk", Name = "BBC STREAM 53 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
+            { "stream_54_uk", new Source { Id = "stream_54_uk", Name = "BBC STREAM 54 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
+            { "stream_55_uk", new Source { Id = "stream_55_uk", Name = "BBC STREAM 55 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
+            { "stream_56_uk", new Source { Id = "stream_56_uk", Name = "BBC STREAM 56 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
+            { "stream_57_uk", new Source { Id = "stream_57_uk", Name = "BBC STREAM 57 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
+            { "stream_58_uk", new Source { Id = "stream_58_uk", Name = "BBC STREAM 58 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
+            { "stream_59_uk", new Source { Id = "stream_59_uk", Name = "BBC STREAM 59 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
+
+            { "stream_51_ww", new Source { Id = "stream_51_ww", Name = "BBC STREAM 51", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
+            { "stream_52_ww", new Source { Id = "stream_52_ww", Name = "BBC STREAM 52", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
+            { "stream_53_ww", new Source { Id = "stream_53_ww", Name = "BBC STREAM 53", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
+            { "stream_54_ww", new Source { Id = "stream_54_ww", Name = "BBC STREAM 54", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
+            { "stream_55_ww", new Source { Id = "stream_55_ww", Name = "BBC STREAM 55", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
+            { "stream_56_ww", new Source { Id = "stream_56_ww", Name = "BBC STREAM 56", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
+            { "stream_57_ww", new Source { Id = "stream_57_ww", Name = "BBC STREAM 57", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
+            { "stream_58_ww", new Source { Id = "stream_58_ww", Name = "BBC STREAM 58", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
+            { "stream_59_ww", new Source { Id = "stream_59_ww", Name = "BBC STREAM 59", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
+
+            // World service
+            { "ws_05", new Source { Id = "ws_05", Name = "World Service Stream 05 (Urdu, Pashto, Burmese, Swahili, Arabic Services)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_05/" } },
+            { "ws_06", new Source { Id = "ws_06", Name = "World Service Stream 06 (Telugu, Tamil, Kyrgyz, Hindi, Ukranian Services)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_06/" } },
+            { "ws_07", new Source { Id = "ws_07", Name = "World Service Stream 07 (Afghan Retransmission)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_07/" } },
+            { "ws_08", new Source { Id = "ws_08", Name = "World Service Stream 08 (News Asia Pacific)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_08/" } },
+            { "ws_afghan", new Source { Id = "ws_afghan", Name = "BBC Afghanistan", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_afghan_tv/" } }
         };
 
-        public static Source GetSource(string channel) => All[channel];
+        public static Source GetSource(string id) => All.ContainsKey(id) ? All[id] : null;
     }
+}
 
-    public class Source
-    {
-        public string UrlPrefix { get; set; }
-    }
+public class Source
+{
+    public string Id { get; set; }
+    public string Name { get; set; }
+    public string Category { get; set; }
+    public string UrlPrefix { get; set; }
+
+    public string VideoPath { get; set; } = "v=pv14/b=5070016";
+
+    public string AudioPath { get; set; } = "a=pa3/al=en-GB/ap=main/b=96000";
 }

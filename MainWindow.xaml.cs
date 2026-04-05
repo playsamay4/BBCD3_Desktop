@@ -4,6 +4,7 @@ using System.IO;
 using System.Text;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Data;
 
 
 namespace BBCD3_Desktop;
@@ -28,10 +29,12 @@ public partial class MainWindow : Window
         Directory.CreateDirectory(logsFolder);
         logPath = Path.Combine(logsFolder, "error_log.txt");
 
-        foreach(string key in SOURCES.All.Keys)
-        {
-            ChannelsList.Items.Add(key);
-        }
+        var channelItems = SOURCES.All.Values.ToList();
+        ListCollectionView lcv = new ListCollectionView(channelItems);
+        lcv.GroupDescriptions.Add(new PropertyGroupDescription("Category"));
+        ChannelsList.ItemsSource = lcv;
+        ChannelsList.DisplayMemberPath = "Name";
+        ChannelsList.SelectedValuePath = "Id";
 
         Downloader.StatusUpdate += Downloader_StatusUpdate;
         Downloader.DownloadError += Downloader_DownloadError;
@@ -169,9 +172,9 @@ public partial class MainWindow : Window
 
             //convert to str yyyy-MM-ddTHH:mm:ssZ
             string pickedDateTimeStr = pickedDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            string channel = ChannelsList.SelectedItem.ToString();
+            string selectedId = ChannelsList.SelectedValue.ToString();
 
-            int durationHrs = Convert.ToInt32(DurationHours.Text);
+        int durationHrs = Convert.ToInt32(DurationHours.Text);
             int durationMins = Convert.ToInt32(DurationMinutes.Text);
             int durationSecs = Convert.ToInt32(DurationSeconds.Text);
             //add to start time, converted to yyyy-MM-ddTHH:mm:ssZ
@@ -181,7 +184,7 @@ public partial class MainWindow : Window
             bool encode = EncodeCheckbox.IsChecked.Value;
             bool fastMode = FastModeCheckbox.IsChecked.Value;
     
-            Downloader.StartDownload(pickedDateTimeStr, endTimeStr, channel, savePath, encode, fastMode);
+            Downloader.StartDownload(pickedDateTimeStr, endTimeStr, selectedId, savePath, encode, fastMode);
         }
 
 
