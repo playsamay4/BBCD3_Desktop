@@ -34,7 +34,7 @@ namespace BBCD3_Desktop
         {
             string appFolder = AppDomain.CurrentDomain.BaseDirectory;
             string logsFolder = Path.Combine(appFolder, "logs");
-            Directory.CreateDirectory(logsFolder); 
+            Directory.CreateDirectory(logsFolder);
             _logFilePath = Path.Combine(logsFolder, "download_log.txt");
         }
 
@@ -69,8 +69,8 @@ namespace BBCD3_Desktop
             long startTimestamp = new DateTimeOffset(startTime).ToUnixTimeSeconds();
             long endTimestamp = new DateTimeOffset(endTime).ToUnixTimeSeconds();
 
-            _isErrorDisplayed = false; // Reset at the start of each *full* download.
-            _hasDownloadFailed = false; // Reset at the start of each full download.
+            _isErrorDisplayed = false; 
+            _hasDownloadFailed = false; 
 
             await Clip(source, startTimestamp, endTimestamp, jobUuid, finalPath, encode);
         }
@@ -88,7 +88,7 @@ namespace BBCD3_Desktop
 
                     using (HttpClient client = new HttpClient())
                     {
-                        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/137.0.0.0");
+                        client.DefaultRequestHeaders.UserAgent.ParseAdd("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36 Edg/149.0.0.0");
                         var response = await client.GetAsync(url);
 
                         if (response.IsSuccessStatusCode)
@@ -113,7 +113,7 @@ namespace BBCD3_Desktop
                     }
                 }
                 catch (Exception ex)
-                {   
+                {
                     Debug.WriteLine($"Exception during download of {url}: {ex.Message}");
                     Log($"Exception during download of {url}: {ex.Message}", ConsoleColor.Red);
                     retries++;
@@ -126,142 +126,156 @@ namespace BBCD3_Desktop
                 }
             }
 
-            Log($"Failed to download {url} after {MAX_RETRIES} retries.", ConsoleColor.Red, true);
-            SetDownloadFailed(); // Set the failure flag.
+            Log($"Failed to download {url} after {MAX_RETRIES} retries.", ConsoleColor.Red, false);
+            SetDownloadFailed(); 
             return false;
         }
 
         static async Task<string[]> DownloadSegments(Source source, string jobUuid, int[] segmentIdxRange)
         {
-            string urlPrefix = source.UrlPrefix;
-
-            string videoInitUrl = $"{urlPrefix}{source.VideoPath}/segment.init";
-            string audioInitUrl = $"{urlPrefix}{source.AudioPath}/segment.init";
-
-            string videoInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_init.m4s";
-            string audioInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_init.m4s";
-
-            Log("Downloading initialization segments...", ConsoleColor.Cyan);
-
-            bool videoInitSuccess = await DownloadSegmentWithRetry(videoInitUrl, videoInitFilename);
-            if (!videoInitSuccess)
+            List<string> testPrefixes = new List<string> { source.UrlPrefix };
+            foreach (var provider in SOURCES.PROVIDERS)
             {
-                Log("Failed to download initialization segments. Aborting.", ConsoleColor.Red, true);
-                SetDownloadFailed();
-                SetErrorDisplayed();
-                return null;
-            }
-
-            bool audioInitSuccess = await DownloadSegmentWithRetry(audioInitUrl, audioInitFilename);
-            if (!audioInitSuccess)
-            {
-                Log("Failed to download initialization segments. Aborting.", ConsoleColor.Red, true);
-                SetDownloadFailed();
-                SetErrorDisplayed();
-                return null;
-            }
-
-            //Calculate total segments for progress reporting.
-            int totalSegments = (segmentIdxRange[1] - segmentIdxRange[0] + 1) * 2;
-
-            //Track completed segment downloads
-            int completedSegments = 0;
-
-            if (FAST_MODE)
-            {
-                Log("Downloading segments in FAST MODE (Limited Concurrency)...", ConsoleColor.Magenta);
-
-                
-                using (var semaphore = new SemaphoreSlim(_CONCURRENT_DOWNLOAD_LIMIT))
+                string parsedPrefix = source.GetUrlPrefixForProvider(provider);
+                if (!testPrefixes.Contains(parsedPrefix))
                 {
-                    var tasks = new List<Task>();
+                    testPrefixes.Add(parsedPrefix);
+                }
+            }
+
+            for (int p = 0; p < testPrefixes.Count; p++)
+            {
+                string currentUrlPrefix = testPrefixes[p];
+                _hasDownloadFailed = false;
+
+                Log($"[PROVIDER TRY {p + 1}/{testPrefixes.Count}] Using base URL: {currentUrlPrefix}", ConsoleColor.Cyan);
+
+                string videoInitUrl = $"{currentUrlPrefix}{source.VideoPath}/segment.init";
+                string audioInitUrl = $"{currentUrlPrefix}{source.AudioPath}/segment.init";
+
+                string videoInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_init.m4s";
+                string audioInitFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_init.m4s";
+
+                Log("Downloading initialization segments...", ConsoleColor.Cyan);
+
+                bool videoInitSuccess = await DownloadSegmentWithRetry(videoInitUrl, videoInitFilename);
+                if (!videoInitSuccess)
+                {
+                    Log($"Init video segment failed on provider {p + 1}. using next provider...", ConsoleColor.Magenta);
+                    continue;
+                }
+
+                bool audioInitSuccess = await DownloadSegmentWithRetry(audioInitUrl, audioInitFilename);
+                if (!audioInitSuccess)
+                {
+                    Log($"Init audio segment failed on provider {p + 1}. using next provider...", ConsoleColor.Magenta);
+                    continue;
+                }
+
+                int totalSegments = (segmentIdxRange[1] - segmentIdxRange[0] + 1) * 2;
+                int completedSegments = 0;
+
+                if (FAST_MODE)
+                {
+                    Log("Downloading segments in FAST MODE (Limited Concurrency)...", ConsoleColor.Magenta);
+
+                    using (var semaphore = new SemaphoreSlim(_CONCURRENT_DOWNLOAD_LIMIT))
+                    {
+                        var tasks = new List<Task>();
+
+                        for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
+                        {
+                            if (_hasDownloadFailed) break;
+
+                            int idx = segmentIdx;
+
+                            // video segment block
+                            tasks.Add(Task.Run(async () =>
+                            {
+                                await semaphore.WaitAsync();
+                                try
+                                {
+                                    if (_hasDownloadFailed) return;
+                                    string videoUrl = $"{currentUrlPrefix}t=3840/{source.VideoPath}/{idx}.m4s";
+                                    string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{idx}.m4s";
+
+                                    await DownloadSegmentAsync(videoUrl, videoFilename, () =>
+                                    {
+                                        Interlocked.Increment(ref completedSegments);
+                                        UpdateProgress(completedSegments, totalSegments);
+                                    });
+                                }
+                                finally { semaphore.Release(); }
+                            }));
+
+                            // audio segment block
+                            tasks.Add(Task.Run(async () =>
+                            {
+                                await semaphore.WaitAsync();
+                                try
+                                {
+                                    if (_hasDownloadFailed) return;
+                                    string audioUrl = $"{currentUrlPrefix}t=3840/{source.AudioPath}/{idx}.m4s";
+                                    string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{idx}.m4s";
+
+                                    await DownloadSegmentAsync(audioUrl, audioFilename, () =>
+                                    {
+                                        Interlocked.Increment(ref completedSegments);
+                                        UpdateProgress(completedSegments, totalSegments);
+                                    });
+                                }
+                                finally { semaphore.Release(); }
+                            }));
+                        }
+
+                        await Task.WhenAll(tasks);
+                    }
+                }
+                else
+                {
+                    Log("Downloading segments in STABLE MODE (sequential downloads)...", ConsoleColor.DarkYellow);
 
                     for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
                     {
                         if (_hasDownloadFailed) break;
 
-                       
-                        int idx = segmentIdx;
-
-                        //vid  task
-                        tasks.Add(Task.Run(async () =>
+                        string videoUrl = $"{currentUrlPrefix}t=3840/{source.VideoPath}/{segmentIdx}.m4s";
+                        string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
+                        Log($"Downloading video segment {segmentIdx}...", ConsoleColor.White);
+                        bool videoSuccess = await DownloadSegmentWithRetry(videoUrl, videoFilename);
+                        if (videoSuccess)
                         {
-                            await semaphore.WaitAsync();
-                            try
-                            {
-                                if (_hasDownloadFailed) return;
-                                string videoUrl = $"{urlPrefix}t=3840/{source.VideoPath}/{idx}.m4s";
-                                string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{idx}.m4s";
+                            Interlocked.Increment(ref completedSegments);
+                            UpdateProgress(completedSegments, totalSegments);
+                        }
 
-                                await DownloadSegmentAsync(videoUrl, videoFilename, () =>
-                                {
-                                    Interlocked.Increment(ref completedSegments);
-                                    UpdateProgress(completedSegments, totalSegments);
-                                });
-                            }
-                            finally { semaphore.Release(); }
-                        }));
-
-                        //audio task
-                        tasks.Add(Task.Run(async () =>
+                        string audioUrl = $"{currentUrlPrefix}t=3840/{source.AudioPath}/{segmentIdx}.m4s";
+                        string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
+                        Log($"Downloading audio segment {segmentIdx}...", ConsoleColor.White);
+                        bool audioSuccess = await DownloadSegmentWithRetry(audioUrl, audioFilename);
+                        if (audioSuccess)
                         {
-                            await semaphore.WaitAsync();
-                            try
-                            {
-                                if (_hasDownloadFailed) return;
-                                string audioUrl = $"{urlPrefix}t=3840/{source.AudioPath}/{idx}.m4s";
-                                string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{idx}.m4s";
-
-                                await DownloadSegmentAsync(audioUrl, audioFilename, () =>
-                                {
-                                    Interlocked.Increment(ref completedSegments);
-                                    UpdateProgress(completedSegments, totalSegments);
-                                });
-                            }
-                            finally { semaphore.Release(); }
-                        }));
+                            Interlocked.Increment(ref completedSegments);
+                            UpdateProgress(completedSegments, totalSegments);
+                        }
                     }
-
-                    await Task.WhenAll(tasks);
                 }
-            }
-            else
-            {
-                Log("Downloading segments in STABLE MODE (sequential downloads)...", ConsoleColor.DarkYellow);
 
-                for (int segmentIdx = segmentIdxRange[0]; segmentIdx <= segmentIdxRange[1]; segmentIdx++)
+                // If this loop finished and the flag remains false, the whole set downloaded perfectly!
+                if (!_hasDownloadFailed)
                 {
-                    // Stop if a download has failed
-                    if (_hasDownloadFailed) break;
-
-                    string videoUrl = $"{urlPrefix}t=3840/{source.VideoPath}/{segmentIdx}.m4s";
-                    string videoFilename = $"{TEMP_DIRECTORY}/{jobUuid}/video_{segmentIdx}.m4s";
-                    Log($"Downloading video segment {segmentIdx}...", ConsoleColor.White);
-                    bool videoSuccess = await DownloadSegmentWithRetry(videoUrl, videoFilename);
-                    if (videoSuccess)
-                    {
-                        Interlocked.Increment(ref completedSegments);
-                        UpdateProgress(completedSegments, totalSegments);
-                    }
-
-                    string audioUrl = $"{urlPrefix}t=3840/{source.AudioPath}/{segmentIdx}.m4s";
-                    string audioFilename = $"{TEMP_DIRECTORY}/{jobUuid}/audio_{segmentIdx}.m4s";
-                    Log($"Downloading audio segment {segmentIdx}...", ConsoleColor.White);
-                    bool audioSuccess = await DownloadSegmentWithRetry(audioUrl, audioFilename);
-                    if (audioSuccess)
-                    {
-                        Interlocked.Increment(ref completedSegments);
-                        UpdateProgress(completedSegments, totalSegments);
-                    }
+                    Log($"All segments obtained using provider  {p + 1}!", ConsoleColor.Green);
+                    return new[] { videoInitFilename, audioInitFilename };
+                }
+                else
+                {
+                    Log($"Provider {p + 1} errored out, trying next...", ConsoleColor.Magenta);
                 }
             }
 
-            if (_hasDownloadFailed)
-            {
-                return null; 
-            }
-
-            return new[] { videoInitFilename, audioInitFilename };
+            Log("All provider servers failed. aborted", ConsoleColor.Red, true);
+            SetErrorDisplayed();
+            return null;
         }
 
         static async Task DownloadSegmentAsync(string url, string filename, Action onComplete)
@@ -275,14 +289,13 @@ namespace BBCD3_Desktop
             }
             else
             {
-                SetDownloadFailed(); 
+                SetDownloadFailed();
             }
         }
 
         static void SetDownloadFailed()
         {
             _hasDownloadFailed = true;
-            SetErrorDisplayed();
         }
 
         static void SetErrorDisplayed()
@@ -302,12 +315,7 @@ namespace BBCD3_Desktop
 
         static async Task CombineSegments(string jobUuid, int[] segmentIdxRange, string videoInitFilename, string audioInitFilename, string outputFilename, string finalPath, bool encode)
         {
-            if (_hasDownloadFailed)
-            {
-                Log("Skipping combining segments due to download failure.", ConsoleColor.DarkGray);
-                return;
-            }
-
+            
             Log("Combining segments (Binary Stitching)...", ConsoleColor.Cyan);
             StatusUpdate?.Invoke(null, "Combining segments...");
 
@@ -375,7 +383,7 @@ namespace BBCD3_Desktop
             string fancyName = $"{source.Id}_{startTimestamp}_{endTimestamp}.mp4";
             fancyName =
                 fancyName.Replace(" ", "-");
-                
+
             string outputFilename = $"{TEMP_DIRECTORY}/{jobUuid}/{fancyName}";
 
             try
@@ -395,14 +403,14 @@ namespace BBCD3_Desktop
                     {
                         var filenames = await DownloadSegments(source, jobUuid, segmentIdxRange);
 
-                        if (filenames != null && !_hasDownloadFailed) // Check if downloads were successful AND no download has failed
+                        if (filenames != null)
                         {
                             await CombineSegments(jobUuid, segmentIdxRange, filenames[0], filenames[1], outputFilename, finalPath, encode);
                             Log($"Clip created at {outputFilename}", ConsoleColor.Cyan);
                         }
                         else
                         {
-                            Log("Download failed. Aborting combining segments.", ConsoleColor.Red, true);
+                            Log("Download failed across all providers. aborted", ConsoleColor.Red, true);
                         }
                     }
                     catch (Exception e)
@@ -458,7 +466,7 @@ namespace BBCD3_Desktop
                 StartInfo = new ProcessStartInfo
                 {
                     FileName = "ffmpeg",
-                    Arguments = command, // Note: No extra quotes here; they are in the command string already
+                    Arguments = command, 
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
@@ -537,7 +545,7 @@ namespace BBCD3_Desktop
                 {
                     _isErrorDisplayed = true;
 
-                    StatusUpdate?.Invoke(null, $"[ERROR] {message}");  
+                    StatusUpdate?.Invoke(null, $"[ERROR] {message}");
 
                     DownloadError?.Invoke(null, message);
                 }
@@ -557,128 +565,7 @@ namespace BBCD3_Desktop
         }
     }
 
-    public static class SOURCES
-    {
-        public static Dictionary<string, Source> All = new Dictionary<string, Source>
-        {
-            // BBC News
-            { "news_uk", new Source { Id = "news_uk", Name = "BBC News UK", Category = "News", UrlPrefix = "https://vs-cmaf-push-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/" } },
-            { "news_uk_fhd", new Source {
-                Id = "news_uk_fhd",
-                Name = "BBC News UK",
-                Category = "News FHD",
-                UrlPrefix = "https://vs-cmaf-push-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_news_channel_hd/",
-                VideoPath = "v=pv66/b=6500000",
-                AudioPath = "a=pa6/al=en-GB/ap=main/b=320000"
-            } },
-            { "news_na", new Source { Id = "news_na", Name = "BBC News World (North America) [US-Only Geoblock]", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-ntham-gcomm-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_world_news_north_america/" } },
-            { "news_af", new Source { Id = "news_af", Name = "BBC News World (Africa) [Australia-Only Geoblock]", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-apac-gcomm.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_world_news_africa/" } },
-            { "news_ar", new Source { Id = "news_ar", Name = "BBC News Arabic", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_arabic_tv/" } },
-            { "news_fa", new Source { Id = "news_fa", Name = "BBC News Persian", Category = "News", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_persian_tv/" } },
 
-            //BBC One HD
-            { "one_lon", new Source { Id = "one_lon", Name = "BBC One London [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/" } },
-            { "one_wal", new Source { Id = "one_wal", Name = "BBC One Wales [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/" } },
-            { "one_sco", new Source { Id = "one_sco", Name = "BBC One Scotland [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/" } },
-            { "one_ni",  new Source { Id = "one_ni",  Name = "BBC One Northern Ireland [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_northern_ireland_hd/" } },
-            { "one_ci",  new Source { Id = "one_ci",  Name = "BBC One Channel Islands [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_channel_islands/" } },
-            { "one_east", new Source { Id = "one_east", Name = "BBC One East [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east/" } },
-            { "one_em", new Source { Id = "one_em", Name = "BBC One East Midlands [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_midlands/" } },
-            { "one_ey", new Source { Id = "one_ey", Name = "BBC One East Yorks & Lincs [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_yorkshire/" } },
-            { "one_ne", new Source { Id = "one_ne", Name = "BBC One North East [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_one_north_east/" } },
-            { "one_nw", new Source { Id = "one_nw", Name = "BBC One North West [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/" } },
-            { "one_sou", new Source { Id = "one_sou", Name = "BBC One South [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south/" } },
-            { "one_se", new Source { Id = "one_se", Name = "BBC One South East [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_east/" } },
-            { "one_sw", new Source { Id = "one_sw", Name = "BBC One South West [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_west/" } },
-            { "one_wes", new Source { Id = "one_wes", Name = "BBC One West [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west/" } },
-            { "one_wm", new Source { Id = "one_wm", Name = "BBC One West Midlands [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/" } },
-            { "one_yor", new Source { Id = "one_yor", Name = "BBC One Yorkshire [UK Only]", Category = "BBC One", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_yorks/" } },
+ 
 
-            // BBC ONE FHD
-            { "one_lon_fhd", new Source { Id = "one_lon_fhd", Name = "BBC One London [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_london/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_wal_fhd", new Source { Id = "one_wal_fhd", Name = "BBC One Wales [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_wales_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_sco_fhd", new Source { Id = "one_sco_fhd", Name = "BBC One Scotland [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_scotland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_ni_fhd",  new Source { Id = "one_ni_fhd",  Name = "BBC One Northern Ireland [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_northern_ireland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_ci_fhd",  new Source { Id = "one_ci_fhd",  Name = "BBC One Channel Islands [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_channel_islands/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_east_fhd", new Source { Id = "one_east_fhd", Name = "BBC One East [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_em_fhd", new Source { Id = "one_em_fhd", Name = "BBC One East Midlands [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_midlands/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_ey_fhd", new Source { Id = "one_ey_fhd", Name = "BBC One East Yorks & Lincs [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_east_yorkshire/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_ne_fhd", new Source { Id = "one_ne_fhd", Name = "BBC One North East [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_east/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_nw_fhd", new Source { Id = "one_nw_fhd", Name = "BBC One North West [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_north_west/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_sou_fhd", new Source { Id = "one_sou_fhd", Name = "BBC One South [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_se_fhd", new Source { Id = "one_se_fhd", Name = "BBC One South East [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_east/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_sw_fhd", new Source { Id = "one_sw_fhd", Name = "BBC One South West [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_south_west/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_wes_fhd", new Source { Id = "one_wes_fhd", Name = "BBC One West [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_wm_fhd", new Source { Id = "one_wm_fhd", Name = "BBC One West Midlands [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_west_midlands/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "one_yor_fhd", new Source { Id = "one_yor_fhd", Name = "BBC One Yorkshire [UK Only]", Category = "BBC One FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_one_yorks/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-
-            // Other bbc HD
-            { "two_eng", new Source { Id = "two_eng", Name = "BBC Two England [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-push-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/" } },
-            { "two_ni", new Source { Id = "two_ni", Name = "BBC Two Northern Ireland [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/" } },
-            { "two_wal", new Source { Id = "two_wal", Name = "BBC Two Wales [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_wales_digital/" } },
-            { "three", new Source { Id = "three", Name = "BBC THREE [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_three_hd/" } },
-            { "four", new Source { Id = "four", Name = "BBC Four [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_four_hd/" } },
-            { "cbbc", new Source { Id = "cbbc", Name = "CBBC [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:cbbc_hd/" } },
-            { "cbeebies", new Source { Id = "cbeebies", Name = "CBEEBIES [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/" } },
-            { "scotland", new Source { Id = "scotland", Name = "BBC Scotland [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_scotland_hd/" } },
-            { "parliament", new Source { Id = "parliament", Name = "BBC Parliament [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:bbc_parliament/" } },
-            { "alba", new Source { Id = "alba", Name = "BBC ALBA [UK Only]", Category = "Other BBC", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/" } },
-
-            //Other bbc fhd
-            { "two_eng_fhd", new Source { Id = "two_eng_fhd", Name = "BBC Two England [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-push-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "two_ni_fhd", new Source { Id = "two_ni_fhd", Name = "BBC Two Northern Ireland [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_northern_ireland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "two_wal_fhd", new Source { Id = "two_wal_fhd", Name = "BBC Two Wales [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_two_wales_digital/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "three_fhd", new Source { Id = "three_fhd", Name = "BBC THREE [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_three_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "four_fhd", new Source { Id = "four_fhd", Name = "BBC Four [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_four_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "cbbc_fhd", new Source { Id = "cbbc_fhd", Name = "CBBC [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbbc_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "cbeebies_fhd", new Source { Id = "cbeebies_fhd", Name = "CBEEBIES [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:cbeebies_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "scotland_fhd", new Source { Id = "scotland_fhd", Name = "BBC Scotland [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_scotland_hd/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "parliament_fhd", new Source { Id = "parliament_fhd", Name = "BBC Parliament [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_parliament/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-            { "alba_fhd", new Source { Id = "alba_fhd", Name = "BBC ALBA [UK Only]", Category = "Other BBC FHD", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_alba/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
-
-            { "s4c", new Source { Id = "s4c", Name = "S4C [UK Only]", Category = "S4C", UrlPrefix = "https://vs-cmaf-pushb-uk.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:s4cpbs/" } },
-
-            // streams 
-            { "stream_51_uk", new Source { Id = "stream_51_uk", Name = "BBC STREAM 51 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
-            { "stream_52_uk", new Source { Id = "stream_52_uk", Name = "BBC STREAM 52 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
-            { "stream_53_uk", new Source { Id = "stream_53_uk", Name = "BBC STREAM 53 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
-            { "stream_54_uk", new Source { Id = "stream_54_uk", Name = "BBC STREAM 54 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
-            { "stream_55_uk", new Source { Id = "stream_55_uk", Name = "BBC STREAM 55 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
-            { "stream_56_uk", new Source { Id = "stream_56_uk", Name = "BBC STREAM 56 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
-            { "stream_57_uk", new Source { Id = "stream_57_uk", Name = "BBC STREAM 57 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
-            { "stream_58_uk", new Source { Id = "stream_58_uk", Name = "BBC STREAM 58 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
-            { "stream_59_uk", new Source { Id = "stream_59_uk", Name = "BBC STREAM 59 [UK Only]", Category = "BBC Streams (UK)", UrlPrefix = "https://ve-hls-pushb-uk-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
-
-            { "stream_51_ww", new Source { Id = "stream_51_ww", Name = "BBC STREAM 51", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_051/" } },
-            { "stream_52_ww", new Source { Id = "stream_52_ww", Name = "BBC STREAM 52", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_052/" } },
-            { "stream_53_ww", new Source { Id = "stream_53_ww", Name = "BBC STREAM 53", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_053/" } },
-            { "stream_54_ww", new Source { Id = "stream_54_ww", Name = "BBC STREAM 54", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_054/" } },
-            { "stream_55_ww", new Source { Id = "stream_55_ww", Name = "BBC STREAM 55", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_055/" } },
-            { "stream_56_ww", new Source { Id = "stream_56_ww", Name = "BBC STREAM 56", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_056/" } },
-            { "stream_57_ww", new Source { Id = "stream_57_ww", Name = "BBC STREAM 57", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_057/" } },
-            { "stream_58_ww", new Source { Id = "stream_58_ww", Name = "BBC STREAM 58", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_058/" } },
-            { "stream_59_ww", new Source { Id = "stream_59_ww", Name = "BBC STREAM 59", Category = "BBC Streams (World)", UrlPrefix = "https://ve-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:uk_bbc_stream_059/" } },
-
-            // World service
-            { "ws_05", new Source { Id = "ws_05", Name = "World Service Stream 05 (Urdu, Pashto, Burmese, Swahili, Arabic Services)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_05/" } },
-            { "ws_06", new Source { Id = "ws_06", Name = "World Service Stream 06 (Telugu, Tamil, Kyrgyz, Hindi, Ukranian Services)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_06/" } },
-            { "ws_07", new Source { Id = "ws_07", Name = "World Service Stream 07 (Afghan Retransmission)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_07/" } },
-            { "ws_08", new Source { Id = "ws_08", Name = "World Service Stream 08 (News Asia Pacific)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_08/" } },
-            { "ws_afghan", new Source { Id = "ws_afghan", Name = "BBC Afghanistan", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_afghan_tv/" } }
-        };
-
-        public static Source GetSource(string id) => All.ContainsKey(id) ? All[id] : null;
-    }
-}
-
-public class Source
-{
-    public string Id { get; set; }
-    public string Name { get; set; }
-    public string Category { get; set; }
-    public string UrlPrefix { get; set; }
-
-    public string VideoPath { get; set; } = "v=pv14/b=5070016";
-
-    public string AudioPath { get; set; } = "a=pa3/al=en-GB/ap=main/b=96000";
 }

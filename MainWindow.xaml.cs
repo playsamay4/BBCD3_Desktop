@@ -17,6 +17,16 @@ public partial class MainWindow : Window
     private readonly string logPath;
     string savePath = Environment.GetEnvironmentVariable("USERPROFILE") + @"\" + "Downloads";
 
+    private Source _selectedSource = null;
+
+    public class GridNavigationItem
+    {
+        public string DisplayName { get; set; }
+        public string TargetId { get; set; }       //nulld if category folder
+        public string TargetCategory { get; set; } // nulled if leaf channel item
+        public bool IsCategoryFolder => TargetId == null;
+    }
+
     public MainWindow()
     {
         InitializeComponent();
@@ -29,12 +39,16 @@ public partial class MainWindow : Window
         Directory.CreateDirectory(logsFolder);
         logPath = Path.Combine(logsFolder, "error_log.txt");
 
-        var channelItems = SOURCES.All.Values.ToList();
-        ListCollectionView lcv = new ListCollectionView(channelItems);
-        lcv.GroupDescriptions.Add(new PropertyGroupDescription("Category"));
-        ChannelsList.ItemsSource = lcv;
-        ChannelsList.DisplayMemberPath = "Name";
-        ChannelsList.SelectedValuePath = "Id";
+
+
+        //var channelItems = SOURCES.All.Values.ToList();
+        //ListCollectionView lcv = new ListCollectionView(channelItems);
+        //lcv.GroupDescriptions.Add(new PropertyGroupDescription("Category"));
+        //ChannelsList.ItemsSource = lcv;
+        //ChannelsList.DisplayMemberPath = "Name";
+        //ChannelsList.SelectedValuePath = "Id";
+
+        LoadTopLevelCategories();
 
         Downloader.StatusUpdate += Downloader_StatusUpdate;
         Downloader.DownloadError += Downloader_DownloadError;
@@ -48,6 +62,66 @@ public partial class MainWindow : Window
         StartTimePicker.Value = londonTime;
         DatePicker.SelectedDate = londonTime;
     }
+
+    private void LoadTopLevelCategories()
+    {
+        // Extracts unique category strings out of your hardcoded Downloader.SOURCES dictionary
+        var topCategories = SOURCES.All.Values
+            .Select(s => s.Category)
+            .Distinct()
+            .Select(cat => new GridNavigationItem
+            {
+                DisplayName = cat,
+                TargetCategory = cat
+            })
+            .ToList();
+
+        ChannelsGridList.ItemsSource = topCategories;
+        CategoryHeader.Text = "Pick a channel category";
+        BackButton.Visibility = Visibility.Collapsed;
+        _selectedSource = null;
+    }
+
+    private void ChannelsGridList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (ChannelsGridList.SelectedItem is GridNavigationItem navItem)
+        {
+            if (navItem.IsCategoryFolder)
+            {
+                // User clicked a Category card -> Drill Down to see channels inside it
+                var subChannels = SOURCES.All.Values
+                    .Where(s => s.Category == navItem.TargetCategory)
+                    .Select(s => new GridNavigationItem
+                    {
+                        // Clean up strings like "BBC One London [UK Only]" down to just "London" or keeping it clean
+                        DisplayName = s.Name.Replace($" [{navItem.TargetCategory}]", "").Replace(" [UK Only]", "").Replace(" [US-Only Geoblock]", "").Replace(" [Australia-Only Geoblock]", ""),
+                        TargetId = s.Id
+                    })
+                    .ToList();
+
+                ChannelsGridList.ItemsSource = subChannels;
+                CategoryHeader.Text = $"{navItem.TargetCategory} Sub-Options";
+                BackButton.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                // User clicked an actual channel item
+                _selectedSource = SOURCES.GetSource(navItem.TargetId);
+                if (_selectedSource != null)
+                {
+                    StatusText.Text = $"Selected: {_selectedSource.Name}";
+                }
+            }
+        }
+    }
+
+
+    private void BackButton_Click(object sender, RoutedEventArgs e)
+    {
+        // Go back up to main categories
+        LoadTopLevelCategories();
+    }
+
 
     private void Downloader_StatusUpdate(object sender, string e)
     {
@@ -128,9 +202,9 @@ public partial class MainWindow : Window
     private bool Validate()
     {
         //validate all fields
-        if (ChannelsList.SelectedItem == null)
+        if (_selectedSource == null)
         {
-            ShowError("Please select a channel");
+            ShowError("Please select a channel from the menu grid.");
             return false;
         }
 
@@ -172,7 +246,7 @@ public partial class MainWindow : Window
 
             //convert to str yyyy-MM-ddTHH:mm:ssZ
             string pickedDateTimeStr = pickedDateTime.ToString("yyyy-MM-ddTHH:mm:ssZ");
-            string selectedId = ChannelsList.SelectedValue.ToString();
+            string selectedId = _selectedSource.Id;
 
         int durationHrs = Convert.ToInt32(DurationHours.Text);
             int durationMins = Convert.ToInt32(DurationMinutes.Text);

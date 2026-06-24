@@ -9,8 +9,8 @@
     mc:Ignorable="d"
     Style="{DynamicResource CustomWindowStyle}"
     Title="BBCD3" 
-    Height="420" 
-    Width="850"
+    Height="509" 
+    Width="887"
     Background="#212121">
 
     <Grid Margin="25">
@@ -36,61 +36,104 @@
                 <ColumnDefinition Width="1*"/>
             </Grid.ColumnDefinitions>
 
-            <StackPanel Grid.Column="0" Margin="0,0,30,0">
-                <TextBlock Text="Pick a channel" Foreground="#AAAAAA" Margin="0,0,0,5" FontSize="12"/>
-                <ComboBox x:Name="ChannelsList" 
-                          Height="32" 
-                          VerticalContentAlignment="Center"
-                          Margin="0,0,0,20">
-                    <ComboBox.GroupStyle>
-                        <GroupStyle>
-                            <GroupStyle.HeaderTemplate>
-                                <DataTemplate>
-                                    <Border Background="#333333" Margin="0,2,0,2" Padding="8,4">
-                                        <TextBlock Text="{Binding Name}" 
-                                                   Foreground="#007ACC" 
-                                                   FontWeight="Bold" 
-                                                   FontSize="11"/>
-                                    </Border>
-                                </DataTemplate>
-                            </GroupStyle.HeaderTemplate>
-                        </GroupStyle>
-                    </ComboBox.GroupStyle>
-                </ComboBox>
+            <Grid Grid.Column="0" Margin="0,0,30,0">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="Auto"/>
+                </Grid.RowDefinitions>
 
-                <TextBlock Text="Schedule (Date &amp; Start Time)" Foreground="#AAAAAA" Margin="0,0,0,5" FontSize="12"/>
-                <UniformGrid Columns="2" Margin="0,0,0,20">
-                    <DatePicker x:Name="DatePicker" 
-                                FirstDayOfWeek="Monday" 
-                                VerticalAlignment="Center" 
-                                Margin="0,0,10,0"/>
-                    <xctk:TimePicker x:Name="StartTimePicker" 
-                                     Height="28"
-                                     Background="#242424" 
-                                     Foreground="White" 
-                                     BorderBrush="#333333" 
-                                     VerticalAlignment="Center"/>
-                </UniformGrid>
-
-                <TextBlock Text="Duration (Hours / Minutes / Seconds)" Foreground="#AAAAAA" Margin="0,0,0,5" FontSize="12"/>
-                <StackPanel Orientation="Horizontal">
-                    <StackPanel Margin="0,0,15,0">
-                        <xctk:IntegerUpDown x:Name="DurationHours" Value="0" Minimum="0" Maximum="12" Width="60" Height="28" Background="#242424" Foreground="White" BorderBrush="#333333"/>
-                        <TextBlock Text="HH" Foreground="#666666" FontSize="10" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                    <StackPanel Margin="0,0,15,0">
-                        <xctk:IntegerUpDown x:Name="DurationMinutes" Value="0" Minimum="0" Maximum="59" Width="60" Height="28" Background="#242424" Foreground="White" BorderBrush="#333333"/>
-                        <TextBlock Text="MM" Foreground="#666666" FontSize="10" HorizontalAlignment="Center"/>
-                    </StackPanel>
-                    <StackPanel>
-                        <xctk:IntegerUpDown x:Name="DurationSeconds" Value="0" Minimum="0" Maximum="59" Width="60" Height="28" Background="#242424" Foreground="White" BorderBrush="#333333"/>
-                        <TextBlock Text="SS" Foreground="#666666" FontSize="10" HorizontalAlignment="Center"/>
+                <StackPanel Grid.Row="0">
+                    <DockPanel Margin="0,0,0,5">
+                        <Button x:Name="BackButton" 
+                    Content="← Back" 
+                    Click="BackButton_Click" 
+                    Visibility="Collapsed" 
+                    Background="Transparent" 
+                    Foreground="#007ACC" 
+                    FontWeight="Bold"
+                    BorderThickness="0" 
+                    Padding="0" 
+                    Margin="0,0,10,0"
+                    Cursor="Hand"
+                    VerticalAlignment="Center"/>
+                        <TextBlock x:Name="CategoryHeader" Text="Pick a channel category" Foreground="#AAAAAA" FontSize="12" VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <ListBox x:Name="ChannelsGridList"
+                 Height="150" Margin="0,0,0,20" Background="#1A1A1A"
+                 BorderThickness="0"
+                 ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                 SelectionChanged="ChannelsGridList_SelectionChanged">
+                        <ListBox.ItemsPanel>
+                            <ItemsPanelTemplate>
+                                <WrapPanel Orientation="Horizontal" Margin="4"/>
+                            </ItemsPanelTemplate>
+                        </ListBox.ItemsPanel>
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Width="85" Height="70" Margin="4">
+                                    <Border x:Name="BgBorder" Background="#282828" CornerRadius="4" BorderThickness="1" BorderBrush="#383838"/>
+                                    <Grid Margin="4">
+                                        <TextBlock Text="{Binding DisplayName}" 
+                                       Foreground="White" 
+                                       FontSize="12" 
+                                       TextAlignment="Center" 
+                                       VerticalAlignment="Center" 
+                                       HorizontalAlignment="Center" 
+                                       TextWrapping="Wrap"/>
+                                    </Grid>
+                                </Grid>
+                                <DataTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="BgBorder" Property="Background" Value="#333333"/>
+                                        <Setter TargetName="BgBorder" Property="BorderBrush" Value="#444444"/>
+                                    </Trigger>
+                                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                        <Setter TargetName="BgBorder" Property="Background" Value="#007ACC"/>
+                                        <Setter TargetName="BgBorder" Property="BorderBrush" Value="#0096FF"/>
+                                    </DataTrigger>
+                                </DataTemplate.Triggers>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </StackPanel>
+                <StackPanel Grid.Row="2">
+                    <TextBlock Text="Schedule (Date &amp; Start Time)" Foreground="#AAAAAA" Margin="0,0,0,5" FontSize="12"/>
+                    <UniformGrid Columns="2" Margin="0,0,0,20">
+                        <DatePicker x:Name="DatePicker" 
+                        FirstDayOfWeek="Monday" 
+                        VerticalAlignment="Center" 
+                        Margin="0,0,10,0"/>
+                        <xctk:TimePicker x:Name="StartTimePicker" 
+                             Height="28"
+                             Background="#242424" 
+                             Foreground="White" 
+                             BorderBrush="#333333" 
+                             VerticalAlignment="Center"/>
+                    </UniformGrid>
+                    <TextBlock Text="Duration (Hours / Minutes / Seconds)" Foreground="#AAAAAA" Margin="0,0,0,5" FontSize="12"/>
+                    <StackPanel Orientation="Horizontal">
+                        <StackPanel Margin="0,0,15,0">
+                            <xctk:IntegerUpDown x:Name="DurationHours" Value="0" Minimum="0" Maximum="12" Width="60" Height="28" Background="#242424" Foreground="White" BorderBrush="#333333"/>
+                            <TextBlock Text="HH" Foreground="#666666" FontSize="10" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel Margin="0,0,15,0">
+                            <xctk:IntegerUpDown x:Name="DurationMinutes" Value="0" Minimum="0" Maximum="59" Width="60" Height="28" Background="#242424" Foreground="White" BorderBrush="#333333"/>
+                            <TextBlock Text="MM" Foreground="#666666" FontSize="10" HorizontalAlignment="Center"/>
+                        </StackPanel>
+                        <StackPanel>
+                            <xctk:IntegerUpDown x:Name="DurationSeconds" Value="0" Minimum="0" Maximum="59" Width="60" Height="28" Background="#242424" Foreground="White" BorderBrush="#333333"/>
+                            <TextBlock Text="SS" Foreground="#666666" FontSize="10" HorizontalAlignment="Center"/>
+                        </StackPanel>
                     </StackPanel>
                 </StackPanel>
-            </StackPanel>
 
-            <StackPanel Grid.Column="1" VerticalAlignment="Top">
-                <TextBlock Text="Settings" Foreground="#AAAAAA" Margin="0,0,0,10" FontSize="12"/>
+
+
+            </Grid>
+
+        <StackPanel Grid.Column="1" VerticalAlignment="Top">
+            <TextBlock Text="Settings" Foreground="#AAAAAA" Margin="0,0,0,10" FontSize="12"/>
 
                 <CheckBox x:Name="EncodeCheckbox" 
                           Content="Enable Encoding (iOS Support)" 
