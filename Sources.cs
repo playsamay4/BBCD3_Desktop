@@ -249,11 +249,12 @@ namespace BBCD3_Desktop
             { "stream_65_ww", new Source { Id = "stream_65_ww", Name = "BBC STREAM 65", Category = "BBC Streams (World)", UrlPrefix = "https://ve-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:ww_bbc_stream_065/" } },
             { "stream_65_ww_fhd", new Source { Id = "stream_65_ww_fhd", Name = "BBC STREAM 65", Category = "BBC Streams (World) FHD", UrlPrefix = "https://ve-cmaf-pushb-uk.live.fastly.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:ww_bbc_stream_065/", VideoPath = "v=pv66/b=6500000", AudioPath = "a=pa6/al=en-GB/ap=main/b=320000" } },
 
+
             // World service
-            { "ws_05", new Source { Id = "ws_05", Name = "World Service Stream 05 (Urdu, Pashto, Burmese, Swahili, Arabic Services)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_05/" } },
-            { "ws_06", new Source { Id = "ws_06", Name = "World Service Stream 06 (Telugu, Tamil, Kyrgyz, Hindi, Ukranian Services)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_06/" } },
-            { "ws_07", new Source { Id = "ws_07", Name = "World Service Stream 07 (Afghan Retransmission)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_07/" } },
-            { "ws_08", new Source { Id = "ws_08", Name = "World Service Stream 08 (News Asia Pacific)", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:world_service_stream_08/" } },
+            { "ws_05", new Source { Id = "ws_05", Name = "World Service Stream 05 (Urdu, Pashto, Burmese, Swahili, Arabic Services)", Category = "BBC World Service", UrlPrefix = "https://vs-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:world_service_stream_05/" } },
+            { "ws_06", new Source { Id = "ws_06", Name = "World Service Stream 06 (Telugu, Tamil, Kyrgyz, Hindi, Ukranian Services)", Category = "BBC World Service", UrlPrefix = "https://vs-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:world_service_stream_06/" } },
+            { "ws_07", new Source { Id = "ws_07", Name = "World Service Stream 07 (Afghan Retransmission)", Category = "BBC World Service", UrlPrefix = "https://vs-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:world_service_stream_07/" } },
+            { "ws_08", new Source { Id = "ws_08", Name = "World Service Stream 08 (News Asia Pacific)", Category = "BBC World Service", UrlPrefix = "https://vs-hls-pushb-ww-live.akamaized.net/x=4/i=urn:bbc:pips:service:world_service_stream_08/" } },
             { "ws_afghan", new Source { Id = "ws_afghan", Name = "BBC Afghanistan", Category = "BBC World Service", UrlPrefix = "https://vs-cmaf-pushb-ww.live.cf.md.bbci.co.uk/x=4/i=urn:bbc:pips:service:bbc_afghan_tv/" } }
         };
 
